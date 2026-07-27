@@ -829,7 +829,7 @@ pub fn delete_report(path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| format!("Failed to delete file: {e}"))
 }
 
-// ─── Last-used config (no named presets — just remember the last run) ──
+// ─── Last-used config (separate from named presets below) ──────
 const LAST_CONFIG_FILE: &str = "last_config.json";
 
 pub(crate) fn get_app_data_dir() -> std::path::PathBuf {
@@ -861,6 +861,87 @@ pub fn load_last_config() -> Result<Option<BenchConfig>, String> {
     }
     let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {e}"))?;
     Ok(serde_json::from_str::<BenchConfig>(&content).ok())
+}
+
+// ─── Named config presets ───────────────────────────────────────
+const PRESETS_DIR: &str = ".inferscope_presets";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConfigPreset {
+    name: String,
+    config: BenchConfig,
+}
+
+fn get_presets_dir() -> std::path::PathBuf {
+    let dir = get_app_data_dir().join(PRESETS_DIR);
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// 把用户输入的预设名转成安全的文件名：只保留字母数字/-/_，其余字符
+/// （空格、斜杠、中文等）统一替换成 "_"。展示用的名字始终从文件内容里的
+/// `name` 字段读回来，不依赖反解文件名，所以这里丢失信息也没关系。
+fn sanitize_preset_filename(name: &str) -> String {
+    let sanitized: String = name
+        .trim()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    format!("{sanitized}.json")
+}
+
+/// 保存（或覆盖）一个命名预设。是否已存在同名预设由前端调用前自行检查
+/// 并弹确认框，这里只管落盘。
+#[tauri::command]
+pub fn save_preset(name: String, config: BenchConfig) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Preset name cannot be empty".to_string());
+    }
+    let path = get_presets_dir().join(sanitize_preset_filename(name));
+    let preset = ConfigPreset { name: name.to_string(), config };
+    let json = serde_json::to_string_pretty(&preset).map_err(|e| format!("Serialization failed: {e}"))?;
+    std::fs::write(&path, json).map_err(|e| format!("Failed to write file: {e}"))
+}
+
+/// 列出已保存的预设名（按名称排序）
+#[tauri::command]
+pub fn list_presets() -> Result<Vec<String>, String> {
+    let dir = get_presets_dir();
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut names = vec![];
+    for entry in std::fs::read_dir(&dir).map_err(|e| format!("Failed to read directory: {e}"))? {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {e}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(preset) = serde_json::from_str::<ConfigPreset>(&content) {
+                    names.push(preset.name);
+                }
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// 按名称加载一个预设的配置
+#[tauri::command]
+pub fn load_preset(name: String) -> Result<BenchConfig, String> {
+    let path = get_presets_dir().join(sanitize_preset_filename(&name));
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {e}"))?;
+    let preset: ConfigPreset =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse preset: {e}"))?;
+    Ok(preset.config)
+}
+
+/// 按名称删除一个预设
+#[tauri::command]
+pub fn delete_preset(name: String) -> Result<(), String> {
+    let path = get_presets_dir().join(sanitize_preset_filename(&name));
+    std::fs::remove_file(&path).map_err(|e| format!("Failed to delete file: {e}"))
 }
 
 // ─── Remote model listing ──────────────────────────────────────
@@ -1127,6 +1208,34 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let restored: BenchConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn test_sanitize_preset_filename_keeps_safe_chars() {
+        assert_eq!(sanitize_preset_filename("my-preset_1"), "my-preset_1.json");
+    }
+
+    #[test]
+    fn test_sanitize_preset_filename_replaces_unsafe_chars() {
+        assert_eq!(sanitize_preset_filename("my preset/v2"), "my_preset_v2.json");
+        // char::is_alphanumeric() is Unicode-aware, so CJK names pass through
+        // unchanged rather than getting replaced — that's fine, every target
+        // filesystem (APFS/NTFS/ext4) handles Unicode filenames natively.
+        assert_eq!(sanitize_preset_filename("中文预设"), "中文预设.json");
+    }
+
+    #[test]
+    fn test_sanitize_preset_filename_trims_whitespace() {
+        assert_eq!(sanitize_preset_filename("  spaced  "), "spaced.json");
+    }
+
+    #[test]
+    fn test_config_preset_json_round_trips() {
+        let preset = ConfigPreset { name: "my preset".to_string(), config: make_config() };
+        let json = serde_json::to_string(&preset).unwrap();
+        let restored: ConfigPreset = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.name, preset.name);
+        assert_eq!(restored.config, preset.config);
     }
 
     #[test]

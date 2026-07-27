@@ -250,6 +250,16 @@ function App() {
   const [importedPrompts, setImportedPrompts] = useState<string[]>([]);
   const [usePromptCycling, setUsePromptCycling] = useState(false);
 
+  // config presets
+  const [presets, setPresets] = useState<string[]>([]);
+  const [selectedPresetName, setSelectedPresetName] = useState("");
+  const [showSavePresetModal, setShowSavePresetModal] = useState(false);
+  const [presetNameInput, setPresetNameInput] = useState("");
+  const [presetPickerOpen, setPresetPickerOpen] = useState(false);
+  const presetPickerRef = useRef<HTMLDivElement>(null);
+  const presetPickerMenuRef = useRef<HTMLDivElement>(null);
+  const presetPickerTriggerRef = useRef<HTMLButtonElement>(null);
+
   // view mode
   const [viewMode, setViewMode] = useState<ViewMode>("config");
 
@@ -319,28 +329,74 @@ function App() {
     if (logPanelRef.current) logPanelRef.current.scrollTop = logPanelRef.current.scrollHeight;
   }, [logs]);
 
-  // 没有"预设"了，只记住上一次实际用过的配置——启动时自动读回来
+  // 把一份加载进来的配置（上次运行 / 某个命名预设）应用到表单状态上，
+  // 两个入口共用同一份"拆开 messages/prompt_pool 回填到各个 state"的逻辑。
+  const applyLoadedConfig = useCallback((loaded: BenchConfig) => {
+    setConfig(loaded);
+    setMessagePairs(
+      loaded.messages && loaded.messages.length > 0
+        ? loaded.messages
+        : [{ role: "user", content: DEFAULT_PROMPT }],
+    );
+    setMultiTurnMode((loaded.messages?.length ?? 0) > 0);
+    const pool = loaded.prompt_pool || [];
+    setImportedPrompts(pool);
+    setUsePromptCycling(pool.length > 0);
+  }, []);
+
+  // 启动时自动读回上一次实际用过的配置（跟下面命名预设列表是两回事）
   useEffect(() => {
     (async () => {
       try {
         const last = await invoke<BenchConfig | null>("load_last_config");
-        if (last) {
-          setConfig(last);
-          setMessagePairs(
-            last.messages && last.messages.length > 0
-              ? last.messages
-              : [{ role: "user", content: DEFAULT_PROMPT }],
-          );
-          setMultiTurnMode((last.messages?.length ?? 0) > 0);
-          const pool = last.prompt_pool || [];
-          setImportedPrompts(pool);
-          setUsePromptCycling(pool.length > 0);
-        }
+        if (last) applyLoadedConfig(last);
       } catch (_) {
         /* ignore — fall back to the hardcoded defaults */
       }
     })();
+  }, [applyLoadedConfig]);
+
+  const refreshPresets = useCallback(async () => {
+    try {
+      const names = await invoke<string[]>("list_presets");
+      setPresets(Array.isArray(names) ? names : []);
+    } catch (_) {
+      /* ignore */
+    }
   }, []);
+
+  useEffect(() => {
+    refreshPresets();
+  }, [refreshPresets]);
+
+  // 弹出面板打开后，把焦点移到菜单里的第一项，方便键盘用户
+  useEffect(() => {
+    if (!presetPickerOpen) return;
+    const firstItem = presetPickerMenuRef.current?.querySelector<HTMLButtonElement>(".preset-picker-item");
+    firstItem?.focus();
+  }, [presetPickerOpen]);
+
+  // 预设选择器弹出面板打开时，点外面或按 Escape 都要能关掉
+  useEffect(() => {
+    if (!presetPickerOpen) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (presetPickerRef.current && !presetPickerRef.current.contains(e.target as Node)) {
+        setPresetPickerOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setPresetPickerOpen(false);
+        presetPickerTriggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [presetPickerOpen]);
 
   const removeListeners = useCallback(() => {
     unlistenRef.current.forEach((fn) => fn());
@@ -622,6 +678,54 @@ function App() {
     }
   };
 
+  const handleOpenSavePresetModal = () => {
+    setPresetPickerOpen(false);
+    setPresetNameInput(selectedPresetName || "");
+    setShowSavePresetModal(true);
+  };
+
+  const handleSavePreset = async () => {
+    const name = presetNameInput.trim();
+    if (!name) return;
+    if (presets.includes(name) && !(await confirm(t.config.presetOverwriteConfirm(name)))) {
+      return;
+    }
+    try {
+      await invoke("save_preset", { name, config: buildEffectiveConfig() });
+      setShowSavePresetModal(false);
+      setPresetNameInput("");
+      setSelectedPresetName(name);
+      await refreshPresets();
+    } catch (e) {
+      await alert(t.config.presetSaveFailed(String(e)));
+    }
+  };
+
+  const handleLoadPreset = async (name: string) => {
+    if (!name) return;
+    try {
+      const loaded = await invoke<BenchConfig>("load_preset", { name });
+      applyLoadedConfig(loaded);
+      setSelectedPresetName(name);
+      setPresetPickerOpen(false);
+      presetPickerTriggerRef.current?.focus();
+    } catch (e) {
+      await alert(t.config.presetLoadFailed(String(e)));
+    }
+  };
+
+  const handleDeletePreset = async (name: string) => {
+    if (!name) return;
+    if (!(await confirm(t.config.presetDeleteConfirm(name)))) return;
+    try {
+      await invoke("delete_preset", { name });
+      if (selectedPresetName === name) setSelectedPresetName("");
+      await refreshPresets();
+    } catch (e) {
+      await alert(t.config.presetDeleteFailed(String(e)));
+    }
+  };
+
   const handleLoadReports = async () => {
     try {
       const r = await invoke<ReportSummary[]>("list_reports");
@@ -747,6 +851,107 @@ function App() {
   const renderConfigView = () => (
     <div className="workspace">
       <aside className="config-panel">
+        <div className="panel-block">
+          <h3 className="panel-block-title">{t.config.sectionPresets}</h3>
+          <div className="preset-picker" ref={presetPickerRef}>
+            {selectedPresetName ? (
+              <div className="preset-chip">
+                <button
+                  type="button"
+                  ref={presetPickerTriggerRef}
+                  className="preset-chip-name"
+                  onClick={() => setPresetPickerOpen((v) => !v)}
+                  aria-haspopup="menu"
+                  aria-expanded={presetPickerOpen}
+                  aria-controls="preset-picker-menu"
+                >
+                  <span className="preset-chip-check">✓</span>
+                  <span className="preset-chip-label">{selectedPresetName}</span>
+                </button>
+                <button
+                  type="button"
+                  className="preset-chip-delete"
+                  onClick={() => handleDeletePreset(selectedPresetName)}
+                  aria-label={t.config.deletePreset}
+                  title={t.config.deletePreset}
+                >
+                  ×
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                ref={presetPickerTriggerRef}
+                className="preset-picker-trigger"
+                onClick={() => setPresetPickerOpen((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={presetPickerOpen}
+                aria-controls="preset-picker-menu"
+              >
+                + {t.config.selectPresetPlaceholder}
+              </button>
+            )}
+            {presetPickerOpen && (
+              <div
+                id="preset-picker-menu"
+                className="preset-picker-menu"
+                ref={presetPickerMenuRef}
+                role="menu"
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+                  const items = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(".preset-picker-item"));
+                  if (items.length === 0) return;
+                  e.preventDefault();
+                  const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+                  const nextIndex = e.key === "ArrowDown"
+                    ? (currentIndex + 1) % items.length
+                    : (currentIndex - 1 + items.length) % items.length;
+                  items[nextIndex].focus();
+                }}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={"preset-picker-item" + (!selectedPresetName ? " active" : "")}
+                  onClick={() => {
+                    setSelectedPresetName("");
+                    setPresetPickerOpen(false);
+                    presetPickerTriggerRef.current?.focus();
+                  }}
+                >
+                  {t.config.presetNotSelected}
+                </button>
+                <div className="preset-picker-divider" />
+                {presets.length === 0 ? (
+                  <div className="preset-picker-empty hint">{t.config.noPresetsYet}</div>
+                ) : (
+                  presets.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      role="menuitem"
+                      className={"preset-picker-item" + (name === selectedPresetName ? " active" : "")}
+                      onClick={() => handleLoadPreset(name)}
+                    >
+                      {name}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="panel-block panel-actions">
+          {status !== "running" && (
+            <div className="panel-actions-row">
+              <button className="btn btn-primary btn-lg" onClick={startBench}>{status === "done" ? t.config.restartBench : t.config.startBench}</button>
+              <button type="button" className="btn btn-secondary btn-lg" onClick={handleOpenSavePresetModal}>{t.config.savePreset}</button>
+            </div>
+          )}
+          {status === "running" && <button className="btn btn-danger btn-lg btn-block" onClick={handleCancel}>{t.config.cancelBench}</button>}
+        </div>
+
         <div className="panel-block">
           <h3 className="panel-block-title">{t.config.sectionConnection}</h3>
           <label className="field">
@@ -874,11 +1079,6 @@ function App() {
               <button className="btn btn-secondary btn-sm" onClick={() => setMessagePairs((p) => [...p, { role: "user", content: "" }])}>{t.config.addMessage}</button>
             </div>
           )}
-        </div>
-
-        <div className="panel-actions">
-          {status !== "running" && <button className="btn btn-primary btn-lg btn-block" onClick={startBench}>{status === "done" ? t.config.restartBench : t.config.startBench}</button>}
-          {status === "running" && <button className="btn btn-danger btn-lg btn-block" onClick={handleCancel}>{t.config.cancelBench}</button>}
         </div>
       </aside>
 
@@ -1158,6 +1358,33 @@ function App() {
     );
   };
 
+  const renderSavePresetModal = () => (
+    <div className="modal-backdrop" onClick={() => setShowSavePresetModal(false)}>
+      <div className="modal-panel modal-panel-sm" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{t.config.savePreset}</h2>
+          <button className="btn btn-ghost btn-icon" onClick={() => setShowSavePresetModal(false)} aria-label={t.settings.close}>×</button>
+        </div>
+        <div className="modal-body">
+          <label className="field">
+            <span className="field-label">{t.config.presetNamePlaceholder}</span>
+            <input
+              autoFocus
+              value={presetNameInput}
+              onChange={(e) => setPresetNameInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleSavePreset(); if (e.key === "Escape") setShowSavePresetModal(false); }}
+              placeholder={t.config.presetNamePlaceholder}
+            />
+          </label>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary btn-sm" onClick={() => setShowSavePresetModal(false)}>{t.topbar.cancel}</button>
+          <button className="btn btn-primary btn-sm" onClick={handleSavePreset} disabled={!presetNameInput.trim()}>{t.config.savePreset}</button>
+        </div>
+      </div>
+    </div>
+  );
+
   // ─── SETTINGS panel ─────────────────────────────────────────
   const renderSettingsPanel = () => (
     <div className="modal-backdrop" onClick={() => setShowSettings(false)}>
@@ -1283,6 +1510,7 @@ function App() {
         {viewMode === "history" && renderHistoryView()}
       </main>
 
+      {showSavePresetModal && renderSavePresetModal()}
       {showSettings && renderSettingsPanel()}
     </div>
   );

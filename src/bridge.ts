@@ -15,6 +15,7 @@ class InMemoryBridge {
   private _benchState = { running: false, canceled: false };
   private _reports: MockReport[] = [];
   private _importedFiles = new Map<string, string>();
+  private _presets = new Map<string, Record<string, unknown>>();
 
   async invoke(cmd: string, args: Record<string, unknown>): Promise<unknown> {
     const cfg = (args.config as Record<string, unknown>) ?? {};
@@ -41,6 +42,25 @@ class InMemoryBridge {
         } catch (_) {
           return null;
         }
+      }
+      case "save_preset": {
+        const name = String((args as any).name ?? "").trim();
+        if (!name) throw new Error("Preset name cannot be empty");
+        this._presets.set(name, cfg);
+        return undefined;
+      }
+      case "list_presets":
+        return Array.from(this._presets.keys()).sort();
+      case "load_preset": {
+        const name = String((args as any).name ?? "");
+        const found = this._presets.get(name);
+        if (!found) throw new Error(`Preset "${name}" not found`);
+        return found;
+      }
+      case "delete_preset": {
+        const name = String((args as any).name ?? "");
+        this._presets.delete(name);
+        return undefined;
       }
       case "save_app_settings": {
         try {

@@ -11,6 +11,18 @@ export interface Translations {
     settings: string;
   };
   config: {
+    sectionPresets: string;
+    selectPresetPlaceholder: string;
+    noPresetsYet: string;
+    presetNotSelected: string;
+    presetNamePlaceholder: string;
+    savePreset: string;
+    deletePreset: string;
+    presetOverwriteConfirm: (name: string) => string;
+    presetDeleteConfirm: (name: string) => string;
+    presetSaveFailed: (msg: string) => string;
+    presetLoadFailed: (msg: string) => string;
+    presetDeleteFailed: (msg: string) => string;
     sectionConnection: string;
     baseUrlLabel: string;
     modelLabel: string;
@@ -169,6 +181,18 @@ const en: Translations = {
     settings: "Settings",
   },
   config: {
+    sectionPresets: "Presets",
+    selectPresetPlaceholder: "Load a preset…",
+    noPresetsYet: "No presets saved yet",
+    presetNotSelected: "Not selected",
+    presetNamePlaceholder: "Preset name",
+    savePreset: "Save Preset",
+    deletePreset: "Delete Preset",
+    presetOverwriteConfirm: (name) => `A preset named "${name}" already exists. Overwrite it?`,
+    presetDeleteConfirm: (name) => `Delete preset "${name}"?`,
+    presetSaveFailed: (msg) => `Failed to save preset: ${msg}`,
+    presetLoadFailed: (msg) => `Failed to load preset: ${msg}`,
+    presetDeleteFailed: (msg) => `Failed to delete preset: ${msg}`,
     sectionConnection: "Connection",
     baseUrlLabel: "API Base URL",
     modelLabel: "Model Name",
@@ -327,6 +351,18 @@ const zhCN: Translations = {
     settings: "设置",
   },
   config: {
+    sectionPresets: "预设",
+    selectPresetPlaceholder: "加载预设…",
+    noPresetsYet: "还没有保存的预设",
+    presetNotSelected: "未选择",
+    presetNamePlaceholder: "预设名称",
+    savePreset: "保存预设",
+    deletePreset: "删除预设",
+    presetOverwriteConfirm: (name) => `已存在名为"${name}"的预设，要覆盖吗？`,
+    presetDeleteConfirm: (name) => `确定删除预设"${name}"？`,
+    presetSaveFailed: (msg) => `保存预设失败：${msg}`,
+    presetLoadFailed: (msg) => `加载预设失败：${msg}`,
+    presetDeleteFailed: (msg) => `删除预设失败：${msg}`,
     sectionConnection: "连接",
     baseUrlLabel: "API Base URL",
     modelLabel: "模型名称",
@@ -485,6 +521,18 @@ const zhTW: Translations = {
     settings: "設定",
   },
   config: {
+    sectionPresets: "預設",
+    selectPresetPlaceholder: "載入預設…",
+    noPresetsYet: "還沒有儲存的預設",
+    presetNotSelected: "未選擇",
+    presetNamePlaceholder: "預設名稱",
+    savePreset: "儲存預設",
+    deletePreset: "刪除預設",
+    presetOverwriteConfirm: (name) => `已存在名為「${name}」的預設，要覆蓋嗎？`,
+    presetDeleteConfirm: (name) => `確定刪除預設「${name}」？`,
+    presetSaveFailed: (msg) => `儲存預設失敗：${msg}`,
+    presetLoadFailed: (msg) => `載入預設失敗：${msg}`,
+    presetDeleteFailed: (msg) => `刪除預設失敗：${msg}`,
     sectionConnection: "連線",
     baseUrlLabel: "API Base URL",
     modelLabel: "模型名稱",
