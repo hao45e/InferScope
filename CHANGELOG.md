@@ -28,6 +28,12 @@ MINOR per [RELEASING.md](./RELEASING.md)).
   selection from a compact picker at the top of the Config sidebar, delete a
   preset from its chip. ([#1](https://github.com/hao45e/InferScope/issues/1))
 
+### Changed
+
+- Replaced the default Tauri scaffold app icon with a custom one (pulse/
+  waveform mark on the same mauve→lavender gradient as the in-app brand
+  mark). ([#8](https://github.com/hao45e/InferScope/issues/8))
+
 ## [0.1.0] - 2026-07-27
 
 ### Added
