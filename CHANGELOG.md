@@ -34,6 +34,12 @@ MINOR per [RELEASING.md](./RELEASING.md)).
   waveform mark on the same mauve→lavender gradient as the in-app brand
   mark). ([#8](https://github.com/hao45e/InferScope/issues/8))
 
+### Fixed
+
+- In-app update check pointed at a placeholder GitHub repo (`your-org/inferscope`)
+  and always failed; it now correctly queries `hao45e/InferScope`.
+  ([#10](https://github.com/hao45e/InferScope/issues/10))
+
 ## [0.1.0] - 2026-07-27
 
 ### Added

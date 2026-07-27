@@ -2,10 +2,8 @@ use serde::{Deserialize, Serialize};
 
 const SETTINGS_FILE: &str = "settings.json";
 
-/// GitHub 仓库地址目前是占位符——项目还没建仓库/发 release，等实际仓库
-/// 建好之后把这两个常量换成真的 owner/repo 就行，其它逻辑不用动。
-pub const GITHUB_OWNER: &str = "your-org";
-pub const GITHUB_REPO: &str = "inferscope";
+pub const GITHUB_OWNER: &str = "hao45e";
+pub const GITHUB_REPO: &str = "InferScope";
 
 fn default_language() -> String {
     "en".to_string()
