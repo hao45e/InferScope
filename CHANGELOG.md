@@ -22,6 +22,12 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 
 ## [Unreleased]
 
+### Added
+
+- Config presets: save the current form as a named preset, load or clear the
+  selection from a compact picker at the top of the Config sidebar, delete a
+  preset from its chip. ([#1](https://github.com/hao45e/InferScope/issues/1))
+
 ## [0.1.0] - 2026-07-27
 
 ### Added
