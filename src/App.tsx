@@ -1813,25 +1813,29 @@ function App() {
           <p className="empty-hint">{t.history.emptyHint}</p>
         ) : (
           <div className="report-list">
-            {reports.map((rep) => (
-              <div className="report-row" key={rep.path}>
-                <label className="report-row-select">
-                  <input
-                    type="checkbox"
-                    checked={selectedHistoryReports.some((r) => r.path === rep.path)}
-                    onChange={() => handleToggleHistorySelection(rep)}
-                  />
-                </label>
-                <div className="report-row-main">
-                  <span className="report-model">{rep.model}</span>
-                  <span className="report-meta">{t.history.requestsAndTime(rep.num_requests, rep.created_at)}</span>
+            {reports.map((rep) => {
+              const isSelected = selectedHistoryReports.some((r) => r.path === rep.path);
+              return (
+                <div
+                  className={"report-row" + (isSelected ? " report-row-selected" : "")}
+                  key={rep.path}
+                  role="checkbox"
+                  aria-checked={isSelected}
+                  tabIndex={0}
+                  onClick={() => handleToggleHistorySelection(rep)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggleHistorySelection(rep); } }}
+                >
+                  <div className="report-row-main">
+                    <span className="report-model">{rep.model}</span>
+                    <span className="report-meta">{t.history.requestsAndTime(rep.num_requests, rep.created_at)}</span>
+                  </div>
+                  <div className="report-row-actions">
+                    <button className="btn btn-primary btn-sm" onClick={(e) => { e.stopPropagation(); handleViewReportDetail(rep.path); }}>{t.history.viewDetail}</button>
+                    <button className="btn btn-ghost btn-sm btn-danger-text" onClick={(e) => { e.stopPropagation(); handleDeleteSavedReport(rep.path); }}>{t.history.delete}</button>
+                  </div>
                 </div>
-                <div className="report-row-actions">
-                  <button className="btn btn-primary btn-sm" onClick={() => handleViewReportDetail(rep.path)}>{t.history.viewDetail}</button>
-                  <button className="btn btn-ghost btn-sm btn-danger-text" onClick={() => handleDeleteSavedReport(rep.path)}>{t.history.delete}</button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

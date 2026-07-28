@@ -31,6 +31,14 @@ MINOR per [RELEASING.md](./RELEASING.md)).
   levels, not yet combined with comparing multiple models.
   ([#3](https://github.com/hao45e/InferScope/issues/3))
 
+### Changed
+
+- History: select reports for comparison by clicking anywhere on the row
+  instead of a separate checkbox — the row highlights (tinted background +
+  accent border) when selected. Clicking "View Detail" or "Delete" still
+  works without toggling selection.
+  ([#20](https://github.com/hao45e/InferScope/issues/20))
+
 ### Fixed
 
 - History's Saved Reports list had no max height and grew unbounded,
