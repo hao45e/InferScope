@@ -37,6 +37,7 @@
 - 并发扫描：同一个模型依次跑一串逗号分隔的并发数，画出吞吐量-延迟曲线找饱和点
 
 **请求配置**
+- 保存/加载命名配置预设——把整份表单（连接、负载参数、Prompt）存下来，随时从一个紧凑的选择器切换
 - 支持 Bearer Token / 自定义 Authorization 头
 - 任意自定义 HTTP 头（JSON 格式）
 - 单轮或多轮（system/user/assistant）对话测试
@@ -58,14 +59,14 @@
 
 **应用本身**
 - 界面语言：English（默认）、简体中文、繁體中文
-- 外观主题：浅色 / 深灰色 / 跟随系统
+- 外观主题：浅色 / 深色 / 跟随系统
 - 分级日志面板（Debug/Info/Warn/Error），支持搜索和导出
 - 应用内检查更新（对接 GitHub Releases）
 
 ## 系统要求
 
 - macOS 12+ / Windows 10+ / Linux（GTK3）
-- [Rust](https://rustup.rs) 1.75+
+- [Rust](https://rustup.rs) 1.85+（`tiktoken-rs` 这个依赖要求的最低版本）
 - Node.js 18+ 和 [pnpm](https://pnpm.io) 8+
 
 ## 快速开始
@@ -118,6 +119,23 @@ inferscope bench --preset my-preset
 | `messages` | Message[]? | `[]` | 多轮对话消息列表 |
 | `image_data_url` | string? | — | 附加到单轮 prompt 的图片，data URI 格式（`data:image/png;base64,...`） |
 
+## 稳定性
+
+从 v1.0 开始，`BenchConfig`（上表这份 schema——预设、`last_config.json`、
+已保存的报告、CLI 的 `--config` 文件都用它）和 `BenchReport`（每份已保存
+报告的格式，以及 CLI 的 JSON 输出）是稳定的 API：
+
+- 新增字段一律是可选的、有默认值——绝不会新增必填字段。旧版本写出来的
+  配置/报告文件，换到新版本照样能读。
+- 在同一个 MINOR/PATCH 版本内，不会删除、改名或者挪用某个字段的含义。
+  这类改动属于破坏性变更（见 [CONTRIBUTING.md](./CONTRIBUTING.md)），
+  会触发 MAJOR 版本号升级（1.0 之前是 MINOR，按
+  [RELEASING.md](./RELEASING.md) 的规则）。
+- 上面这张表就是当前字段列表的唯一权威来源，没有另外维护一份 schema 文件。
+
+因为改动只做加法，所以已保存的预设/报告、CI 里用的配置文件不需要额外
+带版本号也能跨版本继续读。
+
 ## 输出指标
 
 - **TTFT**（首字延迟）— P50/P90/P95/P99
@@ -158,7 +176,7 @@ inferscope bench --preset my-preset
 欢迎提交 Issue 和 PR。提交改动前请确保：
 
 ```bash
-cd src-tauri && cargo test && cargo clippy   # 要求零警告
+cd src-tauri && cargo test && cargo clippy --all-targets --all-features -- -D warnings
 npx tsc --noEmit
 ```
 
