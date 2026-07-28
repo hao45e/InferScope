@@ -36,6 +36,11 @@ export interface Translations {
     addModel: string;
     compareTargetsLabel: string;
     modelComparisonTitle: string;
+    sweepConcurrencyToggle: string;
+    sweepResultsTitle: string;
+    sweepChartTitle: string;
+    sweepThroughputLegend: string;
+    sweepProgressLabel: (i: number, n: number, concurrency: string) => string;
     authHeaderLabel: string;
     authHeaderPlaceholder: string;
     customHeadersLabel: string;
@@ -97,6 +102,7 @@ export interface Translations {
   };
   results: {
     title: string;
+    runMeta: (concurrency: number, numRequests: number) => string;
     emptyHint: string;
     avgThroughput: string;
     successRate: string;
@@ -208,6 +214,11 @@ const en: Translations = {
     addModel: "+ Add model",
     compareTargetsLabel: "Models to Compare",
     modelComparisonTitle: "Model Comparison",
+    sweepConcurrencyToggle: "Sweep concurrency levels",
+    sweepResultsTitle: "Concurrency Sweep",
+    sweepChartTitle: "Throughput vs. Latency",
+    sweepThroughputLegend: "Throughput",
+    sweepProgressLabel: (i, n, concurrency) => `Concurrency ${i}/${n}: ${concurrency}`,
     authHeaderLabel: "API Key (optional)",
     authHeaderPlaceholder: "Bearer sk-xxx, or leave blank for no auth",
     customHeadersLabel: "Custom HTTP Headers (JSON, optional)",
@@ -269,6 +280,7 @@ const en: Translations = {
   },
   results: {
     title: "Benchmark Results",
+    runMeta: (concurrency, numRequests) => `concurrency=${concurrency} · ${numRequests} requests`,
     emptyHint: "No results yet — run a benchmark from the Config page first.",
     avgThroughput: "Avg Throughput",
     successRate: "Success Rate",
@@ -380,6 +392,11 @@ const zhCN: Translations = {
     addModel: "+ 添加模型",
     compareTargetsLabel: "对比模型",
     modelComparisonTitle: "模型对比结果",
+    sweepConcurrencyToggle: "扫描多个并发数",
+    sweepResultsTitle: "并发扫描结果",
+    sweepChartTitle: "吞吐量 vs 延迟",
+    sweepThroughputLegend: "吞吐量",
+    sweepProgressLabel: (i, n, concurrency) => `并发数 ${i}/${n}：${concurrency}`,
     authHeaderLabel: "API 密钥（可选）",
     authHeaderPlaceholder: "Bearer sk-xxx 或留空不使用认证",
     customHeadersLabel: "自定义 HTTP 头（JSON，可选）",
@@ -441,6 +458,7 @@ const zhCN: Translations = {
   },
   results: {
     title: "基准测试结果",
+    runMeta: (concurrency, numRequests) => `并发数=${concurrency} · ${numRequests} 个请求`,
     emptyHint: "还没有可显示的结果，先在「配置」页运行一次压测。",
     avgThroughput: "平均吞吐",
     successRate: "成功率",
@@ -552,6 +570,11 @@ const zhTW: Translations = {
     addModel: "+ 新增模型",
     compareTargetsLabel: "對比模型",
     modelComparisonTitle: "模型比較結果",
+    sweepConcurrencyToggle: "掃描多個並發數",
+    sweepResultsTitle: "並發掃描結果",
+    sweepChartTitle: "吞吐量 vs 延遲",
+    sweepThroughputLegend: "吞吐量",
+    sweepProgressLabel: (i, n, concurrency) => `並發數 ${i}/${n}：${concurrency}`,
     authHeaderLabel: "API 金鑰（可選）",
     authHeaderPlaceholder: "Bearer sk-xxx 或留空不使用驗證",
     customHeadersLabel: "自訂 HTTP 標頭（JSON，可選）",
@@ -613,6 +636,7 @@ const zhTW: Translations = {
   },
   results: {
     title: "基準測試結果",
+    runMeta: (concurrency, numRequests) => `並發數=${concurrency} · ${numRequests} 個請求`,
     emptyHint: "還沒有可顯示的結果，先在「配置」頁執行一次壓測。",
     avgThroughput: "平均吞吐",
     successRate: "成功率",
