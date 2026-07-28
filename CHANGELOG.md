@@ -27,6 +27,14 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 - Config presets: save the current form as a named preset, load or clear the
   selection from a compact picker at the top of the Config sidebar, delete a
   preset from its chip. ([#1](https://github.com/hao45e/InferScope/issues/1))
+- Multi-model comparison: run the same prompt/params against a list of
+  targets in one batch — each target has its own base URL, model, and API
+  key, so you can compare across different providers, not just different
+  models on the same endpoint. Results show every target side by side, the
+  best value per metric highlighted, and each other value annotated with its
+  delta from the best. History's report comparison was generalized the same
+  way — select any number of saved reports (not just two) to compare.
+  ([#2](https://github.com/hao45e/InferScope/issues/2))
 
 ### Changed
 

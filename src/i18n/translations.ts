@@ -30,6 +30,12 @@ export interface Translations {
     fetchModels: string;
     fetchingModels: string;
     selectFetchedModel: string;
+    benchmarkModeLabel: string;
+    singleModelTab: string;
+    compareModelsTab: string;
+    addModel: string;
+    compareTargetsLabel: string;
+    modelComparisonTitle: string;
     authHeaderLabel: string;
     authHeaderPlaceholder: string;
     customHeadersLabel: string;
@@ -58,6 +64,7 @@ export interface Translations {
     restartBench: string;
     cancelBench: string;
     requestsSuffix: string;
+    batchModelLabel: (i: number, n: number, model: string) => string;
     statusLabel: string;
     statusIdle: string;
     statusRunning: string;
@@ -122,16 +129,11 @@ export interface Translations {
     emptyHint: string;
     requestsAndTime: (n: number, time: string) => string;
     viewDetail: string;
-    loadForCompare: string;
     delete: string;
     deleteConfirm: (name: string) => string;
     deleteFailed: (msg: string) => string;
     compareResultTitle: string;
-    selectAnotherHint: string;
     metricCol: string;
-    aCol: string;
-    bCol: string;
-    bColWithCompare: string;
     metricThroughput: string;
     metricSuccessRate: string;
     metricTtftP50: string;
@@ -200,6 +202,12 @@ const en: Translations = {
     fetchModels: "Fetch Models",
     fetchingModels: "Fetching…",
     selectFetchedModel: "Select a fetched model…",
+    benchmarkModeLabel: "Benchmark Mode",
+    singleModelTab: "Single Model",
+    compareModelsTab: "Compare Models",
+    addModel: "+ Add model",
+    compareTargetsLabel: "Models to Compare",
+    modelComparisonTitle: "Model Comparison",
     authHeaderLabel: "API Key (optional)",
     authHeaderPlaceholder: "Bearer sk-xxx, or leave blank for no auth",
     customHeadersLabel: "Custom HTTP Headers (JSON, optional)",
@@ -228,6 +236,7 @@ const en: Translations = {
     restartBench: "Restart Benchmark",
     cancelBench: "Cancel Benchmark",
     requestsSuffix: "requests",
+    batchModelLabel: (i, n, model) => `Model ${i}/${n}: ${model}`,
     statusLabel: "Status",
     statusIdle: "Idle",
     statusRunning: "Running",
@@ -285,23 +294,18 @@ const en: Translations = {
   },
   history: {
     title: "History Comparison",
-    subtitle: "Select up to two reports to compare",
+    subtitle: "Select reports below to compare",
     refreshList: "Refresh List",
     clearComparison: "Clear Comparison",
     savedReportsTitle: "Saved Reports",
     emptyHint: "No reports yet — run a benchmark first.",
     requestsAndTime: (n, time) => `${n} requests · ${time}`,
     viewDetail: "View Detail",
-    loadForCompare: "Load for Compare",
     delete: "Delete",
     deleteConfirm: (name) => `Delete report ${name}?`,
     deleteFailed: (msg) => `Failed to delete report: ${msg}`,
     compareResultTitle: "Comparison",
-    selectAnotherHint: "Select another report above to compare",
     metricCol: "Metric",
-    aCol: "A",
-    bCol: "B",
-    bColWithCompare: "B (compared)",
     metricThroughput: "Avg Throughput",
     metricSuccessRate: "Success Rate",
     metricTtftP50: "TTFT P50",
@@ -370,6 +374,12 @@ const zhCN: Translations = {
     fetchModels: "获取模型",
     fetchingModels: "获取中…",
     selectFetchedModel: "选择已获取的模型…",
+    benchmarkModeLabel: "压测模式",
+    singleModelTab: "单个模型",
+    compareModelsTab: "对比多个模型",
+    addModel: "+ 添加模型",
+    compareTargetsLabel: "对比模型",
+    modelComparisonTitle: "模型对比结果",
     authHeaderLabel: "API 密钥（可选）",
     authHeaderPlaceholder: "Bearer sk-xxx 或留空不使用认证",
     customHeadersLabel: "自定义 HTTP 头（JSON，可选）",
@@ -398,6 +408,7 @@ const zhCN: Translations = {
     restartBench: "重新开始压测",
     cancelBench: "取消压测",
     requestsSuffix: "请求",
+    batchModelLabel: (i, n, model) => `模型 ${i}/${n}：${model}`,
     statusLabel: "状态",
     statusIdle: "待开始",
     statusRunning: "运行中",
@@ -455,23 +466,18 @@ const zhCN: Translations = {
   },
   history: {
     title: "历史报告对比",
-    subtitle: "最多同时选择两份报告进行对比",
+    subtitle: "在下方勾选要对比的报告",
     refreshList: "刷新列表",
     clearComparison: "清空对比",
     savedReportsTitle: "已保存报告",
     emptyHint: "暂无报告，先运行一次压测后查看。",
     requestsAndTime: (n, time) => `${n} 请求 · ${time}`,
     viewDetail: "查看详情",
-    loadForCompare: "加载对比",
     delete: "删除",
     deleteConfirm: (name) => `确定删除报告 ${name}？`,
     deleteFailed: (msg) => `删除报告失败: ${msg}`,
     compareResultTitle: "对比结果",
-    selectAnotherHint: "再从上方选择一份报告用于对比",
     metricCol: "指标",
-    aCol: "A",
-    bCol: "B",
-    bColWithCompare: "B (对比)",
     metricThroughput: "平均吞吐",
     metricSuccessRate: "成功率",
     metricTtftP50: "TTFT P50",
@@ -540,6 +546,12 @@ const zhTW: Translations = {
     fetchModels: "取得模型",
     fetchingModels: "取得中…",
     selectFetchedModel: "選擇已取得的模型…",
+    benchmarkModeLabel: "壓測模式",
+    singleModelTab: "單一模型",
+    compareModelsTab: "比較多個模型",
+    addModel: "+ 新增模型",
+    compareTargetsLabel: "對比模型",
+    modelComparisonTitle: "模型比較結果",
     authHeaderLabel: "API 金鑰（可選）",
     authHeaderPlaceholder: "Bearer sk-xxx 或留空不使用驗證",
     customHeadersLabel: "自訂 HTTP 標頭（JSON，可選）",
@@ -568,6 +580,7 @@ const zhTW: Translations = {
     restartBench: "重新開始壓測",
     cancelBench: "取消壓測",
     requestsSuffix: "請求",
+    batchModelLabel: (i, n, model) => `模型 ${i}/${n}：${model}`,
     statusLabel: "狀態",
     statusIdle: "待開始",
     statusRunning: "執行中",
@@ -625,23 +638,18 @@ const zhTW: Translations = {
   },
   history: {
     title: "歷史報告對比",
-    subtitle: "最多同時選擇兩份報告進行對比",
+    subtitle: "在下方勾選要對比的報告",
     refreshList: "重新整理清單",
     clearComparison: "清空對比",
     savedReportsTitle: "已儲存報告",
     emptyHint: "暫無報告，先執行一次壓測後查看。",
     requestsAndTime: (n, time) => `${n} 請求 · ${time}`,
     viewDetail: "查看詳情",
-    loadForCompare: "載入對比",
     delete: "刪除",
     deleteConfirm: (name) => `確定刪除報告 ${name}？`,
     deleteFailed: (msg) => `刪除報告失敗: ${msg}`,
     compareResultTitle: "對比結果",
-    selectAnotherHint: "再從上方選擇一份報告用於對比",
     metricCol: "指標",
-    aCol: "A",
-    bCol: "B",
-    bColWithCompare: "B (對比)",
     metricThroughput: "平均吞吐",
     metricSuccessRate: "成功率",
     metricTtftP50: "TTFT P50",
