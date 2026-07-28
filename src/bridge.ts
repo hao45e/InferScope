@@ -110,6 +110,18 @@ class InMemoryBridge {
       case "list_remote_models":
         console.log("[Mock] Simulating model list fetch for", args.baseUrl);
         return ["mock-model-a", "mock-model-b", "mock-model-c"];
+      case "generate_synthetic_prompt_cmd": {
+        // 模拟模式下没有真的分词器，按英文经验比例（约 4 字符 = 1 token）
+        // 拼词凑长度，只是给 UI 联调用，不追求真实场景下的精确 token 数。
+        const targetTokens = Number((args as any).targetTokens) || 0;
+        if (targetTokens <= 0) throw new Error("Target token count must be greater than 0");
+        const words = ["mock", "synthetic", "prompt", "token", "sample", "text", "filler", "data"];
+        let text = "";
+        while (text.length < targetTokens * 4) {
+          text += words[Math.floor(Math.random() * words.length)] + " ";
+        }
+        return text.trim();
+      }
       case "get_logs":
       case "get_logs_with_filter":
         // Real backend always returns Vec<LogEntry> (possibly empty), never

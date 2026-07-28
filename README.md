@@ -41,6 +41,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 - Arbitrary custom HTTP headers (JSON)
 - Single-turn or multi-turn (system/user/assistant) conversation testing
 - Bulk prompt import from `.txt` / `.jsonl`, cycled one-per-request
+- Generate a synthetic prompt with an exact target token count (tokenizer-backed), for fixed-length input testing without hand-crafting prompts
 - Fetch the live model list from the target server instead of typing the model name blind
 
 **Reliability controls**
