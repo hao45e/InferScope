@@ -140,6 +140,43 @@ pub struct CancelEvent {
     pub message: String,
 }
 
+/// 压测过程中的事件推送接口。GUI 模式下转发给 Tauri 前端事件；
+/// 无头模式（CLI）下不需要任何实时事件，只关心最终报告，所以只是
+/// 满足下面压测核心逻辑的泛型约束，不做任何事。这样 GUI 和 CLI 才能
+/// 共用同一套压测引擎代码，不会出现两边行为逐渐分叉的风险。
+pub trait BenchEventSink: Clone + Send + Sync + 'static {
+    fn emit_sse_chunk(&self, event: &SseChunkEvent);
+    fn emit_progress(&self, event: &ProgressEvent);
+    fn emit_canceled(&self, event: &CancelEvent);
+    fn emit_done(&self, report: &BenchReport);
+}
+
+impl<R: Runtime> BenchEventSink for AppHandle<R> {
+    fn emit_sse_chunk(&self, event: &SseChunkEvent) {
+        let _ = self.emit("bench:sse_chunk", event);
+    }
+    fn emit_progress(&self, event: &ProgressEvent) {
+        let _ = self.emit("bench:progress", event);
+    }
+    fn emit_canceled(&self, event: &CancelEvent) {
+        let _ = self.emit("bench:canceled", event);
+    }
+    fn emit_done(&self, report: &BenchReport) {
+        let _ = self.emit("bench:done", report);
+    }
+}
+
+/// 无头模式（CLI）用的事件槽：不推送任何事件。
+#[derive(Clone)]
+pub struct NullEventSink;
+
+impl BenchEventSink for NullEventSink {
+    fn emit_sse_chunk(&self, _event: &SseChunkEvent) {}
+    fn emit_progress(&self, _event: &ProgressEvent) {}
+    fn emit_canceled(&self, _event: &CancelEvent) {}
+    fn emit_done(&self, _report: &BenchReport) {}
+}
+
 // ─── Cancellation ─────────────────────────────────────────────
 static CANCEL_FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -283,8 +320,8 @@ fn build_models_url(base_url: &str) -> String {
 }
 
 /// 向 OpenAI 兼容端点发送单个流式请求并返回指标
-async fn run_request_inner<R: Runtime>(
-    app: &AppHandle<R>,
+async fn run_request_inner<S: BenchEventSink>(
+    sink: &S,
     config: &BenchConfig,
     request_id: u32,
 ) -> Result<RequestMetrics, String> {
@@ -440,7 +477,7 @@ async fn run_request_inner<R: Runtime>(
             // 字符串——前端 listen() 收到的 payload 就是个原始字符串而不是
             // 对象，访问 payload.token 之类字段全是 undefined，进而在
             // .slice()/.length 上抛异常，把整个应用崩掉。
-            let _ = app.emit("bench:sse_chunk", &event);
+            sink.emit_sse_chunk(&event);
 
             token_index += 1;
         }
@@ -463,8 +500,8 @@ async fn run_request_inner<R: Runtime>(
 }
 
 /// 带重试的请求执行
-async fn run_request<R: Runtime>(
-    app: &AppHandle<R>,
+async fn run_request<S: BenchEventSink>(
+    sink: &S,
     config: &BenchConfig,
     request_id: u32,
 ) -> Result<RequestMetrics, String> {
@@ -476,7 +513,7 @@ async fn run_request<R: Runtime>(
             return Err("Benchmark was canceled".to_string());
         }
 
-        match run_request_inner(app, config, request_id).await {
+        match run_request_inner(sink, config, request_id).await {
             Ok(metrics) => return Ok(metrics),
             Err(e) => {
                 last_error = Some(e.clone());
@@ -501,9 +538,14 @@ async fn run_request<R: Runtime>(
     Err(last_error.unwrap_or_else(|| "Unknown error".to_string()))
 }
 
-/// 启动压测引擎（N 路并发）
-#[tauri::command]
-pub async fn start_bench(app: AppHandle, config: BenchConfig) -> Result<(), String> {
+/// 压测引擎核心（N 路并发）。GUI（`start_bench`）和无头 CLI
+/// （`run_headless`）共用这份逻辑，区别只在传入的事件槽不同 ——
+/// 避免两条路径各写一份、行为逐渐分叉。
+/// 返回 `Ok(None)` 表示被取消，`Ok(Some(report))` 表示正常跑完。
+async fn run_bench_core<S: BenchEventSink>(
+    sink: S,
+    config: BenchConfig,
+) -> Result<Option<BenchReport>, String> {
     // Reset cancel flag at start
     CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
 
@@ -532,13 +574,13 @@ pub async fn start_bench(app: AppHandle, config: BenchConfig) -> Result<(), Stri
                 break;
             }
 
-            let app_clone = app.clone();
+            let sink_clone = sink.clone();
             let config_clone = config.clone();
             let completed_clone = completed.clone();
             let metrics_clone = all_metrics.clone();
 
             let h = tokio::spawn(async move {
-                let metrics = run_request(&app_clone, &config_clone, request_id).await;
+                let metrics = run_request(&sink_clone, &config_clone, request_id).await;
                 let done = completed_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
 
                 // 推送进度事件
@@ -552,7 +594,7 @@ pub async fn start_bench(app: AppHandle, config: BenchConfig) -> Result<(), Stri
                         .map(|m| m.tpots.clone())
                         .unwrap_or_default(),
                 };
-                let _ = app_clone.emit("bench:progress", &progress);
+                sink_clone.emit_progress(&progress);
 
                 match metrics {
                     Ok(m) => {
@@ -621,15 +663,12 @@ pub async fn start_bench(app: AppHandle, config: BenchConfig) -> Result<(), Stri
                     drop(m_ref);
 
                     let done = completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    let _ = app.emit(
-                        "bench:progress",
-                        &ProgressEvent {
-                            completed: done,
-                            total: config.num_requests,
-                            current_ttft_us: None,
-                            current_tpots: vec![],
-                        },
-                    );
+                    sink.emit_progress(&ProgressEvent {
+                        completed: done,
+                        total: config.num_requests,
+                        current_ttft_us: None,
+                        current_tpots: vec![],
+                    });
                 }
             }
         }
@@ -646,16 +685,13 @@ pub async fn start_bench(app: AppHandle, config: BenchConfig) -> Result<(), Stri
 
     if check_cancel() {
         let done = completed.load(std::sync::atomic::Ordering::SeqCst);
-        let _ = app.emit(
-            "bench:canceled",
-            CancelEvent {
-                completed: done,
-                total: config.num_requests,
-                message: "Benchmark canceled".to_string(),
-            },
-        );
+        sink.emit_canceled(&CancelEvent {
+            completed: done,
+            total: config.num_requests,
+            message: "Benchmark canceled".to_string(),
+        });
         CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
-        return Ok(());
+        return Ok(None);
     }
 
     let metrics = all_metrics.lock().unwrap();
@@ -668,14 +704,31 @@ pub async fn start_bench(app: AppHandle, config: BenchConfig) -> Result<(), Stri
 
     let report = compute_report(&config, &metrics);
 
-    let _ = app.emit("bench:done", &report);
+    sink.emit_done(&report);
 
     // Auto-save report to disk
     if let Ok(path) = save_report_to_disk(&report) {
         log_msg(LogLevel::Info, "BENCH", format!("Report auto-saved: {}", path));
     }
 
+    Ok(Some(report))
+}
+
+/// 启动压测引擎（N 路并发）—— GUI 入口，事件通过 Tauri 转发给前端。
+#[tauri::command]
+pub async fn start_bench(app: AppHandle, config: BenchConfig) -> Result<(), String> {
+    run_bench_core(app, config).await?;
     Ok(())
+}
+
+/// 无头模式（CLI）入口：跑一次完整压测，返回报告。不经过 Tauri IPC，
+/// 也不依赖任何窗口/事件循环，供 `cli` 模块在没有 GUI 的场景下调用
+/// （比如 CI 里的性能回归检测）。理论上不会走到"被取消"分支 —— CLI
+/// 是一次性进程，没有交互式取消入口 —— 但类型上仍需处理这个可能性。
+pub async fn run_headless(config: BenchConfig) -> Result<BenchReport, String> {
+    run_bench_core(NullEventSink, config)
+        .await?
+        .ok_or_else(|| "Benchmark was canceled".to_string())
 }
 
 /// 计算基准报告
@@ -1713,5 +1766,59 @@ mod tests {
         assert_eq!(result.unwrap_err(), "Benchmark was canceled");
 
         CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// `run_headless` (the CLI entry point) must produce a correct report
+    /// using nothing but `NullEventSink` — no `AppHandle`, no Tauri runtime
+    /// at all. This is the whole point of the GUI/CLI refactor: prove the
+    /// same engine works standalone, not just when driven through Tauri.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_run_headless_produces_report_without_any_tauri_app() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let sse_payloads = vec![
+            r#"{"choices":[{"delta":{"content":"Hello"},"finish_reason":null}]}"#.to_string(),
+            r#"{"choices":[{"delta":{"content":" world"},"finish_reason":"stop"}]}"#.to_string(),
+            "[DONE]".to_string(),
+        ];
+        let (port, _server) = spawn_mock_sse_server(sse_payloads, 10).await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+
+        let report = run_headless(config)
+            .await
+            .expect("headless run against a working mock server should succeed");
+
+        assert_eq!(report.metrics.len(), 1);
+        assert!(report.metrics[0].success);
+        assert_eq!(report.metrics[0].token_count, 2);
+        assert_eq!(report.success_rate_pct, 100.0);
+    }
+
+    /// A failed request still produces a `RequestMetrics` entry (with
+    /// `success: false`), so the report comes back with a 0% success rate
+    /// rather than an `Err` — `run_headless` only errors when the metrics
+    /// list ends up genuinely empty (i.e. `num_requests == 0`).
+    #[tokio::test]
+    async fn test_run_headless_reports_zero_success_rate_when_nothing_is_listening() {
+        let port = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap().port()
+        };
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}/v1");
+        config.request_timeout_ms = 2000;
+        config.max_retries = 0;
+
+        let report = run_headless(config)
+            .await
+            .expect("a failed request still produces a report, not an Err");
+        assert_eq!(report.success_rate_pct, 0.0);
+        assert_eq!(report.metrics.len(), 1);
+        assert!(!report.metrics[0].success);
     }
 }
