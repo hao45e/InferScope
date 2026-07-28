@@ -13,7 +13,6 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 
 | Version | Planned | Why here |
 |---|---|---|
-| v0.2.0 | Config presets (save/load named configs) + multi-model comparison in one batch | Pure additions, don't touch `BenchConfig`/report structures — lowest risk, fastest payoff |
 | v0.3.0 | Concurrency sweep — auto-run a range of concurrency levels and chart throughput vs. latency to find the saturation point | Biggest single feature; introduces a new "sweep mode" report shape, worth its own release |
 | v0.4.0 | Synthetic prompt generator with tokenizer-controlled input/output length | Needs a tokenizer dependency; best done after sweep mode since sweeps usually want fixed-length synthetic input |
 | v0.5.0 | Headless/CLI invocation (run a saved config, emit JSON) for CI perf-regression checks | Wait until the config shape from the above settles so CLI args aren't chasing a moving target |
@@ -21,6 +20,8 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 | v1.0.0 | No new features — freeze `BenchConfig`/report schema as a stable API, docs pass | Marks that the core surface (fixed concurrency, sweep, multi-model, CLI) is complete and stable |
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-07-28
 
 ### Added
 
