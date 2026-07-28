@@ -80,6 +80,23 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+## 无头模式 / CI 集成
+
+构建出来的可执行文件也可以不打开 GUI，直接跑一次压测，方便接入 CI 做性能回归检测：
+
+```bash
+# 跑一个配置文件，把完整报告以 JSON 形式打印到 stdout
+inferscope bench --config bench.json
+
+# 同时把报告写到文件
+inferscope bench --config bench.json --output report.json
+
+# 或者按名称跑应用里已保存的某个预设，而不是配置文件
+inferscope bench --preset my-preset
+```
+
+`bench.json` 是一个 `BenchConfig` JSON 对象——字段说明见下面的[配置字段说明](#配置字段说明)。退出码只反映"这次压测本身有没有跑完"：配置文件读不出来/格式不对是 `2`，一个响应都没拿到是 `1`；哪怕成功率是 0%，只要拿到了报告，退出码依然是 `0`（成功率会体现在 JSON 里），具体要不要按指标判定阈值由外部脚本自己决定。跑的是和 GUI 完全相同的压测引擎，两边结果不会出现分歧。
+
 ## 配置字段说明
 
 | 字段 | 类型 | 默认值 | 说明 |

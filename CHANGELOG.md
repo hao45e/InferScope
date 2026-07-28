@@ -13,11 +13,25 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 
 | Version | Planned | Why here |
 |---|---|---|
-| v0.5.0 | Headless/CLI invocation (run a saved config, emit JSON) for CI perf-regression checks | Wait until the config shape from the above settles so CLI args aren't chasing a moving target |
 | v0.6.0 (if needed) | Multimodal (image input) benchmarking | Only if there's real demand for testing vision models — lowest priority, may be skipped |
 | v1.0.0 | No new features — freeze `BenchConfig`/report schema as a stable API, docs pass | Marks that the core surface (fixed concurrency, sweep, multi-model, CLI) is complete and stable |
 
 ## [Unreleased]
+
+### Added
+
+- Headless/CLI mode: `inferscope bench (--config <path.json> | --preset <name>) [--output <path.json>]`
+  runs a benchmark without opening the GUI and prints the full report as
+  JSON to stdout (optionally also to a file), for scripting into CI
+  perf-regression checks. Exit code reflects whether the run itself
+  completed (0) or failed outright, e.g. an unreadable config (2) or zero
+  responses at all (1) — a 0% success rate still exits 0 with the rate
+  visible in the JSON; comparing metrics against a threshold is left to
+  the calling script. Shares the exact same benchmarking engine as the
+  GUI (refactored behind a `BenchEventSink` trait so the GUI's Tauri
+  event emission and the CLI's no-op path are the only difference),
+  so results can't drift between the two.
+  ([#5](https://github.com/hao45e/InferScope/issues/5))
 
 ## [0.3.0] - 2026-07-28
 

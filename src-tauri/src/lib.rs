@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock};
 use serde::{Deserialize, Serialize};
 
 pub mod bench;
+pub mod cli;
 pub mod settings;
 pub mod synthetic_prompt;
 
@@ -226,40 +227,51 @@ mod tests {
 
     #[test]
     fn test_log_msg_filters_below_min_level() {
+        // LOG_STORE is process-wide and other tests (e.g. bench:: tests that
+        // exercise the real request path) log to it concurrently under
+        // their own tag ("BENCH") — filtering by this test's own unique tag
+        // instead of resetting/asserting on the whole store's length keeps
+        // this test correct regardless of what else is running in parallel.
         let _guard = LOG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         apply_log_level("warn");
-        LOG_STORE.reset();
 
-        log_msg(LogLevel::Debug, "TEST", "should be dropped".to_string());
-        log_msg(LogLevel::Info, "TEST", "should also be dropped".to_string());
-        log_msg(LogLevel::Warn, "TEST", "should be kept".to_string());
-        log_msg(LogLevel::Error, "TEST", "should also be kept".to_string());
+        log_msg(LogLevel::Debug, "TEST_MIN_LEVEL", "should be dropped".to_string());
+        log_msg(LogLevel::Info, "TEST_MIN_LEVEL", "should also be dropped".to_string());
+        log_msg(LogLevel::Warn, "TEST_MIN_LEVEL", "should be kept".to_string());
+        log_msg(LogLevel::Error, "TEST_MIN_LEVEL", "should also be kept".to_string());
 
-        let entries = LOG_STORE.get().lock().unwrap().clone();
+        let entries: Vec<_> = LOG_STORE
+            .get()
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.tag == "TEST_MIN_LEVEL")
+            .cloned()
+            .collect();
         assert_eq!(entries.len(), 2, "only warn/error should have been recorded, got: {entries:?}");
         assert!(entries.iter().all(|e| e.level >= LogLevel::Warn));
 
         apply_log_level("info"); // reset for other tests
-        LOG_STORE.reset();
     }
 
     #[test]
     fn test_get_logs_with_filter_exact_level_match() {
+        // Same concurrent-LOG_STORE concern as above: scope the search
+        // string to a value only this test's own entries contain.
         let _guard = LOG_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         apply_log_level("debug"); // don't let the threshold hide anything here
-        LOG_STORE.reset();
 
-        log_msg(LogLevel::Info, "TEST", "info line".to_string());
-        log_msg(LogLevel::Error, "TEST", "error line".to_string());
+        log_msg(LogLevel::Info, "TEST_EXACT_MATCH", "info line".to_string());
+        log_msg(LogLevel::Error, "TEST_EXACT_MATCH", "error line".to_string());
 
-        let only_errors = get_logs_with_filter(Some("error".to_string()), None);
+        let only_errors =
+            get_logs_with_filter(Some("error".to_string()), Some("TEST_EXACT_MATCH".to_string()));
         assert_eq!(only_errors.len(), 1);
         assert_eq!(only_errors[0].message, "error line");
 
-        let all = get_logs_with_filter(None, None);
+        let all = get_logs_with_filter(None, Some("TEST_EXACT_MATCH".to_string()));
         assert_eq!(all.len(), 2);
 
         apply_log_level("info"); // reset for other tests
-        LOG_STORE.reset();
     }
 }

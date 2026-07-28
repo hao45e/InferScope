@@ -80,6 +80,23 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+## Headless / CI mode
+
+The built binary also runs benchmarks without opening the GUI, for scripting into CI perf-regression checks:
+
+```bash
+# run a config file, print the full report as JSON
+inferscope bench --config bench.json
+
+# also write the report to a file
+inferscope bench --config bench.json --output report.json
+
+# or run one of the app's saved presets by name instead of a file
+inferscope bench --preset my-preset
+```
+
+`bench.json` is a `BenchConfig` JSON object — see [Configuration reference](#configuration-reference) below for the field list. Exit code reflects whether the run itself completed (`0`) or failed outright — an unreadable/invalid config (`2`) or zero responses at all (`1`). A 0% success rate still exits `0` with the rate visible in the JSON; comparing metrics against a threshold is left to the calling script. Runs the exact same benchmarking engine as the GUI, so results can't drift between the two.
+
 ## Configuration reference
 
 | Field | Type | Default | Description |
