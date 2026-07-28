@@ -25,6 +25,7 @@ import type {
   ReportSummary,
 } from "./types/bench";
 import { translations, LANGUAGES, type Language, type Translations } from "./i18n/translations";
+import brandIcon from "./assets/brand-icon.png";
 import "./App.css";
 
 const DEFAULT_PROMPT =
@@ -1999,7 +2000,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="topbar-brand">
-          <span className="brand-mark" aria-hidden="true" />
+          <img src={brandIcon} className="brand-mark" alt="" />
           <div className="brand-text">
             <h1>InferScope</h1>
             <p>{t.topbar.tagline}</p>

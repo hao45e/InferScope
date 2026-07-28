@@ -225,9 +225,8 @@ select:focus-visible {
 .brand-mark {
   width: 30px;
   height: 30px;
-  border-radius: var(--radius-sm);
   flex-shrink: 0;
-  background: linear-gradient(135deg, var(--ctp-mauve), var(--ctp-lavender));
+  object-fit: contain;
 }
 
 .brand-text h1 {
