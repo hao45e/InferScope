@@ -37,6 +37,8 @@ MINOR per [RELEASING.md](./RELEASING.md)).
   pushing the Comparison section far down the page once there were more
   than a handful of saved reports. Now capped at a fixed height with an
   internal scrollbar. ([#13](https://github.com/hao45e/InferScope/issues/13))
+- Settings' dark theme option was labeled "深灰色" (dark gray) instead of
+  "深色" (dark) in both Chinese translations.
 
 ## [0.2.0] - 2026-07-28
 
