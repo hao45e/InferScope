@@ -67,6 +67,7 @@ export interface Translations {
     attachingImage: string;
     removeImage: string;
     attachImageFailed: (msg: string) => string;
+    imageInputLabel: string;
     cyclePrompts: string;
     roleSystem: string;
     roleUser: string;
@@ -253,6 +254,7 @@ const en: Translations = {
     attachingImage: "Attaching…",
     removeImage: "Remove",
     attachImageFailed: (msg) => `Failed to attach image: ${msg}`,
+    imageInputLabel: "Vision input (optional)",
     cyclePrompts: "Cycle through imported prompts (one per request)",
     roleSystem: "system",
     roleUser: "user",
@@ -439,6 +441,7 @@ const zhCN: Translations = {
     attachingImage: "附加中…",
     removeImage: "移除",
     attachImageFailed: (msg) => `附加图片失败：${msg}`,
+    imageInputLabel: "视觉输入（可选）",
     cyclePrompts: "循环使用导入的 Prompt（每个请求使用下一条）",
     roleSystem: "system",
     roleUser: "user",
@@ -625,6 +628,7 @@ const zhTW: Translations = {
     attachingImage: "附加中…",
     removeImage: "移除",
     attachImageFailed: (msg) => `附加圖片失敗：${msg}`,
+    imageInputLabel: "視覺輸入（可選）",
     cyclePrompts: "循環使用匯入的 Prompt（每個請求使用下一條）",
     roleSystem: "system",
     roleUser: "user",

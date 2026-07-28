@@ -1527,6 +1527,8 @@ function App() {
                   {generatingSyntheticPrompt ? t.config.generatingSyntheticPrompt : t.config.generateSyntheticPrompt}
                 </button>
               </div>
+              <div className="field-divider" />
+              <span className="field-label">{t.config.imageInputLabel}</span>
               <div className="field-row-actions">
                 <button
                   type="button"

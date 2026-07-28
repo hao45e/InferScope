@@ -482,6 +482,12 @@ select:focus-visible {
   margin-top: var(--space-1);
 }
 
+.field-divider {
+  height: 1px;
+  margin: var(--space-2) 0;
+  background: var(--border-subtle);
+}
+
 .image-attachment-preview {
   display: flex;
   align-items: center;
