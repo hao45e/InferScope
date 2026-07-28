@@ -462,7 +462,7 @@ select:focus-visible {
   width: 100%;
 }
 
-.synthetic-token-input {
+.field-row-actions .synthetic-token-input {
   width: 90px;
   flex: 0 0 auto;
 }
