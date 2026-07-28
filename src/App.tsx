@@ -1584,7 +1584,10 @@ function App() {
       <div className="view-header">
         <div>
           <h2>{t.config.modelComparisonTitle}</h2>
-          <p className="view-subtitle">{batchResults.map((b) => b.label).join(" · ")}</p>
+          <p className="view-subtitle">
+            {batchResults.map((b) => b.label).join(" · ")}
+            {batchResults[0] && ` · ${t.results.runMeta(batchResults[0].report.config.concurrency, batchResults[0].report.config.num_requests)}`}
+          </p>
         </div>
         <div className="view-actions">
           <button className="btn btn-ghost btn-sm" onClick={() => setShowLogs((v) => !v)}>{showLogs ? t.config.hideLogs : t.config.viewLogs}</button>
@@ -1610,7 +1613,10 @@ function App() {
         <div className="view-header">
           <div>
             <h2>{t.config.sweepResultsTitle}</h2>
-            <p className="view-subtitle">{sweepResults.map((s) => `c=${s.concurrency}`).join(" · ")}</p>
+            <p className="view-subtitle">
+              {sweepResults[0] && `${sweepResults[0].report.config.model} · ${sweepResults[0].report.config.base_url} · ${sweepResults[0].report.config.num_requests} ${t.config.requestsSuffix} · `}
+              {sweepResults.map((s) => `c=${s.concurrency}`).join(" · ")}
+            </p>
           </div>
           <div className="view-actions">
             <button className="btn btn-ghost btn-sm" onClick={() => setShowLogs((v) => !v)}>{showLogs ? t.config.hideLogs : t.config.viewLogs}</button>
@@ -1692,7 +1698,7 @@ function App() {
         <div className="view-header">
           <div>
             <h2>{t.results.title}</h2>
-            <p className="view-subtitle">{r.config.model} · {r.config.base_url}</p>
+            <p className="view-subtitle">{r.config.model} · {r.config.base_url} · {t.results.runMeta(r.config.concurrency, r.config.num_requests)}</p>
           </div>
           <div className="view-actions">
             <button className="btn btn-ghost btn-sm" onClick={() => setShowLogs((v) => !v)}>{showLogs ? t.config.hideLogs : t.config.viewLogs}</button>
