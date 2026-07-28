@@ -19,6 +19,8 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-28
+
 ### Added
 
 - Synthetic prompt generator: enter a target token count next to the Prompt
