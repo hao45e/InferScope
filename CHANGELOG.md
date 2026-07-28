@@ -13,7 +13,6 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 
 | Version | Planned | Why here |
 |---|---|---|
-| v0.4.0 | Synthetic prompt generator with tokenizer-controlled input/output length | Needs a tokenizer dependency; best done after sweep mode since sweeps usually want fixed-length synthetic input |
 | v0.5.0 | Headless/CLI invocation (run a saved config, emit JSON) for CI perf-regression checks | Wait until the config shape from the above settles so CLI args aren't chasing a moving target |
 | v0.6.0 (if needed) | Multimodal (image input) benchmarking | Only if there's real demand for testing vision models — lowest priority, may be skipped |
 | v1.0.0 | No new features — freeze `BenchConfig`/report schema as a stable API, docs pass | Marks that the core surface (fixed concurrency, sweep, multi-model, CLI) is complete and stable |
@@ -22,6 +21,12 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 
 ### Added
 
+- Synthetic prompt generator: enter a target token count next to the Prompt
+  field and generate filler text that encodes to exactly that many tokens
+  (via `tiktoken-rs`'s `cl100k_base` tokenizer, embedded at compile time —
+  no network access or external tokenizer file needed), useful for
+  fixed-length input testing without hand-crafting prompts.
+  ([#4](https://github.com/hao45e/InferScope/issues/4))
 - Concurrency sweep: run the same prompt/model against a comma-separated
   list of concurrency levels in one batch, chart throughput vs. latency
   (dual-axis, TTFT P50) across levels to find the saturation point, plus a

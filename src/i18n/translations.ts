@@ -59,6 +59,10 @@ export interface Translations {
     promptLabel: string;
     importPrompts: string;
     importedCount: (n: number) => string;
+    syntheticTokensPlaceholder: string;
+    generateSyntheticPrompt: string;
+    generatingSyntheticPrompt: string;
+    syntheticPromptFailed: (msg: string) => string;
     cyclePrompts: string;
     roleSystem: string;
     roleUser: string;
@@ -237,6 +241,10 @@ const en: Translations = {
     promptLabel: "Prompt",
     importPrompts: "Import Prompts",
     importedCount: (n) => `Imported ${n} prompts, will cycle through them automatically`,
+    syntheticTokensPlaceholder: "Target tokens",
+    generateSyntheticPrompt: "Generate Synthetic Prompt",
+    generatingSyntheticPrompt: "Generating…",
+    syntheticPromptFailed: (msg) => `Failed to generate synthetic prompt: ${msg}`,
     cyclePrompts: "Cycle through imported prompts (one per request)",
     roleSystem: "system",
     roleUser: "user",
@@ -415,6 +423,10 @@ const zhCN: Translations = {
     promptLabel: "Prompt",
     importPrompts: "导入提示词",
     importedCount: (n) => `已导入 ${n} 条，将自动循环使用`,
+    syntheticTokensPlaceholder: "目标 token 数",
+    generateSyntheticPrompt: "生成合成 Prompt",
+    generatingSyntheticPrompt: "生成中…",
+    syntheticPromptFailed: (msg) => `生成合成 Prompt 失败：${msg}`,
     cyclePrompts: "循环使用导入的 Prompt（每个请求使用下一条）",
     roleSystem: "system",
     roleUser: "user",
@@ -593,6 +605,10 @@ const zhTW: Translations = {
     promptLabel: "Prompt",
     importPrompts: "匯入提示詞",
     importedCount: (n) => `已匯入 ${n} 條，將自動循環使用`,
+    syntheticTokensPlaceholder: "目標 token 數",
+    generateSyntheticPrompt: "產生合成 Prompt",
+    generatingSyntheticPrompt: "產生中…",
+    syntheticPromptFailed: (msg) => `產生合成 Prompt 失敗：${msg}`,
     cyclePrompts: "循環使用匯入的 Prompt（每個請求使用下一條）",
     roleSystem: "system",
     roleUser: "user",

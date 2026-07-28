@@ -462,6 +462,11 @@ select:focus-visible {
   width: 100%;
 }
 
+.field-row-actions .synthetic-token-input {
+  width: 90px;
+  flex: 0 0 auto;
+}
+
 .field input:focus,
 .field textarea:focus,
 .select-sm:focus,

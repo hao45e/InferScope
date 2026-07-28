@@ -315,6 +315,10 @@ function App() {
   const [importedPrompts, setImportedPrompts] = useState<string[]>([]);
   const [usePromptCycling, setUsePromptCycling] = useState(false);
 
+  // 合成 prompt——按目标 token 数生成填充文本，方便测不同输入长度下的性能
+  const [syntheticTokenTarget, setSyntheticTokenTarget] = useState("200");
+  const [generatingSyntheticPrompt, setGeneratingSyntheticPrompt] = useState(false);
+
   // 多模型对比——每个对比目标都有自己独立的 base_url/model/auth_header，
   // 所以能跨厂商对比，不只是同一个端点下比较不同模型。其余参数（并发数、
   // prompt、自定义 headers 等）还是从主表单共用。
@@ -982,6 +986,20 @@ function App() {
     }
   };
 
+  const handleGenerateSyntheticPrompt = async () => {
+    const target = parseInt(syntheticTokenTarget, 10);
+    if (!Number.isFinite(target) || target <= 0) return;
+    setGeneratingSyntheticPrompt(true);
+    try {
+      const generated = await invoke<string>("generate_synthetic_prompt_cmd", { targetTokens: target });
+      setConfig((c) => ({ ...c, prompt: generated }));
+    } catch (e) {
+      await alert(t.config.syntheticPromptFailed(String(e)));
+    } finally {
+      setGeneratingSyntheticPrompt(false);
+    }
+  };
+
   const handleOpenSavePresetModal = () => {
     setPresetPickerOpen(false);
     setPresetNameInput(selectedPresetName || "");
@@ -1465,6 +1483,24 @@ function App() {
                 {importedPrompts.length > 0 && (
                   <span className="hint hint-success">{t.config.importedCount(importedPrompts.length)}</span>
                 )}
+              </div>
+              <div className="field-row-actions">
+                <input
+                  type="number"
+                  min="1"
+                  value={syntheticTokenTarget}
+                  onChange={(e) => setSyntheticTokenTarget(e.target.value)}
+                  className="input-sm synthetic-token-input"
+                  placeholder={t.config.syntheticTokensPlaceholder}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleGenerateSyntheticPrompt}
+                  disabled={generatingSyntheticPrompt}
+                >
+                  {generatingSyntheticPrompt ? t.config.generatingSyntheticPrompt : t.config.generateSyntheticPrompt}
+                </button>
               </div>
               {importedPrompts.length > 0 && (
                 <label className="checkbox-field">

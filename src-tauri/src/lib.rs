@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod bench;
 pub mod settings;
+pub mod synthetic_prompt;
 
 static LOG_STORE: OnceLogStore = OnceLogStore::new();
 
@@ -182,6 +183,7 @@ pub fn run() {
             bench::delete_report,
             bench::read_file_text,
             bench::list_remote_models,
+            synthetic_prompt::generate_synthetic_prompt_cmd,
             settings::save_app_settings,
             settings::load_app_settings,
             settings::check_for_updates,
