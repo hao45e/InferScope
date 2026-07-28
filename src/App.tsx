@@ -24,7 +24,7 @@ import type {
   Message as BenchMessage,
   ReportSummary,
 } from "./types/bench";
-import { translations, LANGUAGES, type Language } from "./i18n/translations";
+import { translations, LANGUAGES, type Language, type Translations } from "./i18n/translations";
 import "./App.css";
 
 const DEFAULT_PROMPT =
@@ -98,6 +98,8 @@ const logMsg = {
   benchTimedOut: (ms: number) => `Benchmark timed out (${ms}ms) — the backend may be unreachable`,
   listenerInitFailed: (msg: string) => `Failed to set up event listeners: ${msg}`,
   invokeFailed: (msg: string) => `Invoke failed! See the console for details\n\n${msg}`,
+  batchModelStarted: (i: number, n: number, model: string) => `Batch ${i}/${n}: running "${model}"`,
+  batchModelDone: (i: number, n: number, model: string) => `Batch ${i}/${n}: "${model}" finished`,
 };
 
 // 跟后端 concurrency_slot() 用的是同一个公式：同一并发槽位号会在不同批次
@@ -155,16 +157,7 @@ type LogLevelSetting = "debug" | "info" | "warn" | "error";
 const THEME_VALUES: ThemeSetting[] = ["light", "dark", "system"];
 const LOG_LEVEL_VALUES: LogLevelSetting[] = ["debug", "info", "warn", "error"];
 
-// ─── Comparison helpers (history view) ─────────────────────────
-interface CompareRow {
-  labelKey: keyof Translations_HistoryMetricLabels;
-  unit: string;
-  a: number;
-  b?: number;
-  higherIsBetter: boolean;
-  digits: number;
-}
-
+// ─── Comparison helpers (history view + multi-model batch results) ─────
 type Translations_HistoryMetricLabels = {
   metricThroughput: string;
   metricSuccessRate: string;
@@ -176,17 +169,76 @@ type Translations_HistoryMetricLabels = {
   metricE2eP99: string;
 };
 
-function buildCompareRows(a: BenchReport, b: BenchReport | null): CompareRow[] {
+interface MultiCompareRow {
+  labelKey: keyof Translations_HistoryMetricLabels;
+  unit: string;
+  values: number[];
+  higherIsBetter: boolean;
+  digits: number;
+}
+
+// 跟 buildCompareRows 结构一样，只是把 a/b 两栏换成任意多个模型的一列数组
+function buildMultiCompareRows(reports: BenchReport[]): MultiCompareRow[] {
   return [
-    { labelKey: "metricThroughput", unit: "tokens/s", a: a.avg_throughput_tok_s, b: b?.avg_throughput_tok_s, higherIsBetter: true, digits: 1 },
-    { labelKey: "metricSuccessRate", unit: "%", a: a.success_rate_pct, b: b?.success_rate_pct, higherIsBetter: true, digits: 1 },
-    { labelKey: "metricTtftP50", unit: "ms", a: a.ttft_p50_ms, b: b?.ttft_p50_ms, higherIsBetter: false, digits: 2 },
-    { labelKey: "metricTtftP99", unit: "ms", a: a.ttft_p99_ms, b: b?.ttft_p99_ms, higherIsBetter: false, digits: 2 },
-    { labelKey: "metricTpotP50", unit: "ms", a: a.tpot_p50_ms, b: b?.tpot_p50_ms, higherIsBetter: false, digits: 3 },
-    { labelKey: "metricTpotP99", unit: "ms", a: a.tpot_p99_ms, b: b?.tpot_p99_ms, higherIsBetter: false, digits: 3 },
-    { labelKey: "metricE2eP50", unit: "ms", a: a.e2e_p50_ms, b: b?.e2e_p50_ms, higherIsBetter: false, digits: 2 },
-    { labelKey: "metricE2eP99", unit: "ms", a: a.e2e_p99_ms, b: b?.e2e_p99_ms, higherIsBetter: false, digits: 2 },
+    { labelKey: "metricThroughput", unit: "tokens/s", values: reports.map((r) => r.avg_throughput_tok_s), higherIsBetter: true, digits: 1 },
+    { labelKey: "metricSuccessRate", unit: "%", values: reports.map((r) => r.success_rate_pct), higherIsBetter: true, digits: 1 },
+    { labelKey: "metricTtftP50", unit: "ms", values: reports.map((r) => r.ttft_p50_ms), higherIsBetter: false, digits: 2 },
+    { labelKey: "metricTtftP99", unit: "ms", values: reports.map((r) => r.ttft_p99_ms), higherIsBetter: false, digits: 2 },
+    { labelKey: "metricTpotP50", unit: "ms", values: reports.map((r) => r.tpot_p50_ms), higherIsBetter: false, digits: 3 },
+    { labelKey: "metricTpotP99", unit: "ms", values: reports.map((r) => r.tpot_p99_ms), higherIsBetter: false, digits: 3 },
+    { labelKey: "metricE2eP50", unit: "ms", values: reports.map((r) => r.e2e_p50_ms), higherIsBetter: false, digits: 2 },
+    { labelKey: "metricE2eP99", unit: "ms", values: reports.map((r) => r.e2e_p99_ms), higherIsBetter: false, digits: 2 },
   ];
+}
+
+// N 列对比表——多模型批量对比结果页、History 多选对比复用同一份渲染逻辑。
+// "最优值"只在成功率 > 0 的报告间比较（全部请求失败时 percentile 退化成 0，
+// 不能算数），非最优的格子额外标一个"跟最优差多少"的小字。
+function renderMultiMetricTable(entries: { label: string; report: BenchReport }[], t: Translations): React.ReactNode {
+  const rows = buildMultiCompareRows(entries.map((e) => e.report));
+  const validIndices = entries
+    .map((e, i) => (e.report.success_rate_pct > 0 ? i : -1))
+    .filter((i) => i >= 0);
+
+  return (
+    <div className="table-scroll">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>{t.history.metricCol}</th>
+            {entries.map((e, i) => <th key={e.label + i}>{e.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const rounded = row.values.map((v) => Number(v.toFixed(row.digits)));
+            const best = validIndices.length > 0
+              ? (row.higherIsBetter
+                ? Math.max(...validIndices.map((i) => rounded[i]))
+                : Math.min(...validIndices.map((i) => rounded[i])))
+              : undefined;
+            return (
+              <tr key={row.labelKey}>
+                <td>{t.history[row.labelKey]} <span className="unit-hint">({row.unit})</span></td>
+                {row.values.map((v, i) => {
+                  const isBest = best !== undefined && rounded[i] === best && validIndices.includes(i);
+                  const showDelta = best !== undefined && validIndices.includes(i) && !isBest;
+                  const diff = rounded[i] - (best ?? 0);
+                  const sign = diff > 0 ? "+" : "";
+                  return (
+                    <td key={i} className={isBest ? "best-value" : undefined}>
+                      {v.toFixed(row.digits)}
+                      {showDelta && <span className="delta delta-bad"> ({sign}{diff.toFixed(row.digits)})</span>}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // ─── App ──────────────────────────────────────────────────────
@@ -239,8 +291,7 @@ function App() {
 
   // report history state
   const [reports, setReports] = useState<ReportSummary[]>([]);
-  const [selectedReportA, setSelectedReportA] = useState<BenchReport | null>(null);
-  const [selectedReportB, setSelectedReportB] = useState<BenchReport | null>(null);
+  const [selectedHistoryReports, setSelectedHistoryReports] = useState<{ path: string; label: string; report: BenchReport }[]>([]);
 
   // multi-turn mode
   const [multiTurnMode, setMultiTurnMode] = useState(false);
@@ -249,6 +300,22 @@ function App() {
   // prompt cycling
   const [importedPrompts, setImportedPrompts] = useState<string[]>([]);
   const [usePromptCycling, setUsePromptCycling] = useState(false);
+
+  // 多模型对比——每个对比目标都有自己独立的 base_url/model/auth_header，
+  // 所以能跨厂商对比，不只是同一个端点下比较不同模型。其余参数（并发数、
+  // prompt、自定义 headers 等）还是从主表单共用。
+  const [multiModelMode, setMultiModelMode] = useState(false);
+  // 第一行先留空——上次用过的 base_url/auth_header 是异步读盘加载的
+  // （load_last_config 那个 effect），组件挂载这一刻它们大概率还没读回来，
+  // 这里要是直接拿 config.base_url 当初始值会永远只读到硬编码的默认值。
+  // 真正的回填放在下面切到对比模式的 handleEnableCompareMode 里，那时候
+  // config 早就已经加载完了。
+  const [compareTargets, setCompareTargets] = useState(() => [
+    { base_url: "", model: "", auth_header: "" },
+  ]);
+  const [compareFetchState, setCompareFetchState] = useState<{ index: number; loading: boolean; options: string[] } | null>(null);
+  const [batchResults, setBatchResults] = useState<{ label: string; report: BenchReport }[]>([]);
+  const [batchProgress, setBatchProgress] = useState<{ index: number; total: number; model: string } | null>(null);
 
   // config presets
   const [presets, setPresets] = useState<string[]>([]);
@@ -403,7 +470,14 @@ function App() {
     unlistenRef.current = [];
   }, []);
 
-  const setupListeners = useCallback(async () => {
+  // onDone/onCanceled 可选——单次压测走默认行为（切到 results 页），批量
+  // 多模型对比每跑完一个模型都会触发一次 bench:done，不能每次都跳转/收尾，
+  // 所以那条路径会传入自己的回调，只记录这一个模型的结果，由外层循环控制
+  // 什么时候真正显示"完成"。
+  const setupListeners = useCallback(async (
+    onDone?: (report: BenchReport) => void,
+    onCanceled?: (message: string) => void,
+  ) => {
     await removeListeners();
 
     const un1 = await listen<SseChunkEvent>("bench:sse_chunk", (ev) => {
@@ -433,21 +507,29 @@ function App() {
 
     const un3 = await listen<BenchReport>("bench:done", (ev) => {
       const safeReport = sanitizeReport(ev.payload);
-      setReport(safeReport);
-      setStatus("done");
-      setViewMode("results");
       setLogs((l) => [
         ...l,
         logLine("INFO", logMsg.benchCompleted(safeReport.metrics.length)),
       ]);
+      if (onDone) {
+        onDone(safeReport);
+      } else {
+        setReport(safeReport);
+        setStatus("done");
+        setViewMode("results");
+      }
     });
     unlistenRef.current.push(un3);
 
     // Listen for cancellation events
     const un4 = await listen<CancelEvent>("bench:canceled", (ev) => {
-      setStatus("done");
-      setViewMode("results");
       setLogs((l) => [...l, logLine("INFO", ev.payload.message)]);
+      if (onCanceled) {
+        onCanceled(ev.payload.message);
+      } else {
+        setStatus("done");
+        setViewMode("results");
+      }
     });
     unlistenRef.current.push(un4);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -536,6 +618,8 @@ function App() {
     setProgress({ completed: 0, total: config.num_requests });
     setMetricsData([]);
     setReport(null);
+    setBatchResults([]);
+    setBatchProgress(null);
     setLogs([logLine("INFO", logMsg.benchStarted())]);
     setShowLogs(true);
 
@@ -608,6 +692,118 @@ function App() {
     }
   };
 
+  // 同一套 prompt/参数依次跑一组模型（后端只有一个进程级 CANCEL_FLAG，
+  // 没法并行跑多个 start_bench，所以这里严格顺序 await，一个跑完再跑下一个）。
+  const startMultiModelBench = async () => {
+    const targets = compareTargets
+      .map((tg) => ({ base_url: tg.base_url.trim(), model: tg.model.trim(), auth_header: tg.auth_header.trim() }))
+      .filter((tg) => tg.base_url && tg.model);
+    if (targets.length === 0) return;
+
+    setStatus("running");
+    setReport(null);
+    setBatchResults([]);
+    setLogs([logLine("INFO", logMsg.benchStarted())]);
+    setShowLogs(true);
+
+    const collected: { label: string; report: BenchReport }[] = [];
+    let stoppedEarly = false;
+    const baseConfig = buildEffectiveConfig();
+
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      const label = `${target.model} (${target.base_url})`;
+      setBatchProgress({ index: i + 1, total: targets.length, model: target.model });
+      setCurrentToken("");
+      // 用 baseConfig（跑批次前冻结的那份配置）而不是 config 活态值——用户在
+      // 批次跑到一半时改了 Num Requests 也不会让这里显示的分母跟这一次
+      // 实际发给后端的请求数对不上（很快也会被真实的 bench:progress 事件覆盖，
+      // 这里只是让初始占位值本身保持自洽）。
+      setProgress({ completed: 0, total: baseConfig.num_requests });
+      setMetricsData([]);
+      setLogs((l) => [...l, logLine("INFO", logMsg.batchModelStarted(i + 1, targets.length, label))]);
+
+      let modelReport: BenchReport | null = null;
+      let modelCanceled = false;
+
+      try {
+        await setupListeners(
+          (rep) => { modelReport = rep; },
+          () => { modelCanceled = true; },
+        );
+      } catch (setupErr) {
+        setLogs((l) => [...l, logLine("ERROR", logMsg.listenerInitFailed(String(setupErr)))]);
+        stoppedEarly = true;
+        break;
+      }
+
+      // 跟单模型那边的超时保护一样，真正把 UI 状态拉回来（而不是只打个日志）
+      // ——不然某个目标卡住的话，整个批次会一直卡在 "running"，Cancel 键之外
+      // 没有任何办法脱困。invoke 本身没法真的中途掐断，等它最终 resolve/reject
+      // 时下面会用 timedOut 这个标记短路掉，不再把这份迟到的结果计进批次里。
+      let timedOut = false;
+      const BENCH_TIMEOUT_MS = 30_000;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        setLogs((l) => [...l, logLine("INFO", logMsg.benchTimedOut(BENCH_TIMEOUT_MS))]);
+        setStatus("done");
+        setViewMode("results");
+      }, BENCH_TIMEOUT_MS);
+
+      try {
+        await invoke("start_bench", {
+          config: {
+            ...baseConfig,
+            base_url: target.base_url,
+            model: target.model,
+            auth_header: target.auth_header || undefined,
+          },
+        });
+      } catch (e: unknown) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        setLogs((l) => [...l, logLine("ERROR", logMsg.invokeFailed(errMsg))]);
+        clearTimeout(timeoutId);
+        if (!timedOut) await alert(t.config.benchFailedBody(errMsg));
+        stoppedEarly = true;
+        break;
+      }
+      clearTimeout(timeoutId);
+
+      if (timedOut) {
+        // UI 已经在上面的 setTimeout 里提前跳去 "done" 了，这份迟到的结果
+        // 不再计入批次，也不再继续跑下一个目标，避免用户以为已经结束了，
+        // 结果后台还在悄悄改状态。
+        stoppedEarly = true;
+        break;
+      }
+
+      if (modelReport) {
+        collected.push({ label, report: modelReport });
+        setBatchResults([...collected]);
+        setLogs((l) => [...l, logLine("INFO", logMsg.batchModelDone(i + 1, targets.length, label))]);
+      }
+      if (modelCanceled) {
+        stoppedEarly = true;
+        break;
+      }
+    }
+
+    setBatchProgress(null);
+    if (!stoppedEarly) {
+      setLogs((l) => [...l, logLine("INFO", logMsg.benchFinished())]);
+    }
+    setStatus("done");
+    setViewMode("results");
+  };
+
+  const handleStartClick = () => {
+    if (multiModelMode) {
+      void startMultiModelBench();
+    } else {
+      void startBench();
+    }
+  };
+
   const handleExport = async (format: "json" | "csv") => {
     if (!report) return;
     try {
@@ -650,6 +846,38 @@ function App() {
     } finally {
       setLoadingModels(false);
     }
+  };
+
+  // 对比模式下每一行的 base_url 都可能不一样，所以拉模型列表必须按行来，
+  // 不能像单模型模式那样用共用的 config.base_url——那个字段在对比模式下
+  // 本来就是隐藏的，用它去拉会拉错服务。
+  const handleFetchModelsForTarget = async (idx: number) => {
+    const tg = compareTargets[idx];
+    if (!tg) return;
+    setCompareFetchState({ index: idx, loading: true, options: [] });
+    try {
+      const models = await invoke<string[]>("list_remote_models", {
+        baseUrl: tg.base_url,
+        authHeader: tg.auth_header || undefined,
+        customHeaders: config.custom_headers,
+      });
+      setCompareFetchState({ index: idx, loading: false, options: models });
+    } catch (e) {
+      setCompareFetchState(null);
+      await alert(t.config.fetchModelsFailed(String(e)));
+    }
+  };
+
+  // 切到"对比模型"模式时，如果第一行还没被用户动过（还是空的），就用这时候
+  // 已经真正加载好的 config.base_url/auth_header 回填——不能在 compareTargets
+  // 的 useState 初始值里直接读 config，因为那时候上次用过的配置可能还没异步
+  // 读盘加载完。
+  const handleEnableCompareMode = () => {
+    setMultiModelMode(true);
+    setCompareTargets((prev) => {
+      const isPristine = prev.length === 1 && !prev[0].base_url && !prev[0].model && !prev[0].auth_header;
+      return isPristine ? [{ base_url: config.base_url, model: "", auth_header: config.auth_header || "" }] : prev;
+    });
   };
 
   const handleImportPrompts = async () => {
@@ -745,17 +973,17 @@ function App() {
     return sanitizeReport(JSON.parse(jsonStr) as BenchReport);
   };
 
-  const handleLoadReport = async (path: string) => {
+  // 勾选/取消勾选一份历史报告加入对比——不限 2 份，选几份就对比几份。
+  const handleToggleHistorySelection = async (rep: ReportSummary) => {
+    if (selectedHistoryReports.some((r) => r.path === rep.path)) {
+      setSelectedHistoryReports((prev) => prev.filter((r) => r.path !== rep.path));
+      return;
+    }
     try {
-      const loaded = await loadReportFromDisk(path);
-      if (!selectedReportA) {
-        setSelectedReportA(loaded);
-      } else if (!selectedReportB) {
-        setSelectedReportB(loaded);
-      } else {
-        setSelectedReportA(loaded);
-        setSelectedReportB(null);
-      }
+      const loaded = await loadReportFromDisk(rep.path);
+      // label 里带上时间戳，避免同一个模型跑了好几次、勾选多份时表头重名分不清。
+      const label = `${rep.model} · ${rep.created_at}`;
+      setSelectedHistoryReports((prev) => [...prev, { path: rep.path, label, report: loaded }]);
     } catch (e) {
       await alert(t.results.loadReportFailed(String(e)));
     }
@@ -767,6 +995,7 @@ function App() {
     try {
       const loaded = await loadReportFromDisk(path);
       setReport(loaded);
+      setBatchResults([]);
       setViewMode("results");
     } catch (e) {
       await alert(t.results.loadReportFailed(String(e)));
@@ -777,15 +1006,15 @@ function App() {
     if (!(await confirm(t.history.deleteConfirm(path.split("/").pop() || path)))) return;
     try {
       await invoke("delete_report", { path });
+      setSelectedHistoryReports((prev) => prev.filter((r) => r.path !== path));
       await handleLoadReports();
     } catch (e) {
       await alert(t.history.deleteFailed(String(e)));
     }
   };
 
-  const clearReportPair = () => {
-    setSelectedReportA(null);
-    setSelectedReportB(null);
+  const clearHistorySelection = () => {
+    setSelectedHistoryReports([]);
   };
 
   const handleCheckForUpdates = async () => {
@@ -851,6 +1080,14 @@ function App() {
   const renderConfigView = () => (
     <div className="workspace">
       <aside className="config-panel">
+        <div className="panel-block">
+          <h3 className="panel-block-title">{t.config.benchmarkModeLabel}</h3>
+          <div className="segmented">
+            <button className={"segmented-btn" + (!multiModelMode ? " active" : "")} onClick={() => setMultiModelMode(false)}>{t.config.singleModelTab}</button>
+            <button className={"segmented-btn" + (multiModelMode ? " active" : "")} onClick={handleEnableCompareMode}>{t.config.compareModelsTab}</button>
+          </div>
+        </div>
+
         <div className="panel-block">
           <h3 className="panel-block-title">{t.config.sectionPresets}</h3>
           <div className="preset-picker" ref={presetPickerRef}>
@@ -945,7 +1182,13 @@ function App() {
         <div className="panel-block panel-actions">
           {status !== "running" && (
             <div className="panel-actions-row">
-              <button className="btn btn-primary btn-lg" onClick={startBench}>{status === "done" ? t.config.restartBench : t.config.startBench}</button>
+              <button
+                className="btn btn-primary btn-lg"
+                onClick={handleStartClick}
+                disabled={multiModelMode && compareTargets.every((tg) => !tg.model.trim() || !tg.base_url.trim())}
+              >
+                {status === "done" ? t.config.restartBench : t.config.startBench}
+              </button>
               <button type="button" className="btn btn-secondary btn-lg" onClick={handleOpenSavePresetModal}>{t.config.savePreset}</button>
             </div>
           )}
@@ -954,42 +1197,120 @@ function App() {
 
         <div className="panel-block">
           <h3 className="panel-block-title">{t.config.sectionConnection}</h3>
-          <label className="field">
-            <span className="field-label">{t.config.baseUrlLabel}</span>
-            <input value={config.base_url} onChange={updateConfig("base_url")} placeholder="http://localhost:11434/v1" />
-          </label>
-          <label className="field">
-            <span className="field-label">{t.config.modelLabel}</span>
-            <div className="input-with-actions">
-              <input value={config.model} onChange={updateConfig("model")} placeholder={t.config.modelPlaceholder} />
-              <button type="button" className="btn btn-secondary btn-sm" onClick={handleFetchModels} disabled={loadingModels}>
-                {loadingModels ? t.config.fetchingModels : t.config.fetchModels}
-              </button>
-              {modelOptions.length > 0 && (
-                <select
-                  value=""
-                  onChange={(e) => { if (e.target.value) setConfig((c) => ({ ...c, model: e.target.value })); }}
-                  className="select-sm"
+          {!multiModelMode && (
+            <label className="field">
+              <span className="field-label">{t.config.baseUrlLabel}</span>
+              <input value={config.base_url} onChange={updateConfig("base_url")} placeholder="http://localhost:11434/v1" />
+            </label>
+          )}
+          <div className="field">
+            <span className="field-label">{multiModelMode ? t.config.compareTargetsLabel : t.config.modelLabel}</span>
+            {!multiModelMode ? (
+              <div className="input-with-actions">
+                <input value={config.model} onChange={updateConfig("model")} placeholder={t.config.modelPlaceholder} />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={handleFetchModels} disabled={loadingModels}>
+                  {loadingModels ? t.config.fetchingModels : t.config.fetchModels}
+                </button>
+                {modelOptions.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => { if (e.target.value) setConfig((c) => ({ ...c, model: e.target.value })); }}
+                    className="select-sm"
+                  >
+                    <option value="">{t.config.selectFetchedModel}</option>
+                    {modelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                )}
+              </div>
+            ) : (
+              <div className="message-list">
+                {compareTargets.map((tg, idx) => (
+                  <div key={idx} className="compare-target-block">
+                    <div className="message-row">
+                      <input
+                        value={tg.base_url}
+                        onChange={(e) => { const next = compareTargets.slice(); next[idx] = { ...next[idx], base_url: e.target.value }; setCompareTargets(next); }}
+                        placeholder="http://localhost:11434/v1"
+                        className="input-sm message-content-input"
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon"
+                        onClick={() => setCompareTargets((prev) => prev.filter((_, i) => i !== idx))}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="message-row compare-target-row">
+                      <input
+                        value={tg.model}
+                        onChange={(e) => { const next = compareTargets.slice(); next[idx] = { ...next[idx], model: e.target.value }; setCompareTargets(next); }}
+                        placeholder={t.config.modelPlaceholder}
+                        className="input-sm"
+                      />
+                      <input
+                        value={tg.auth_header}
+                        onChange={(e) => { const next = compareTargets.slice(); next[idx] = { ...next[idx], auth_header: e.target.value }; setCompareTargets(next); }}
+                        placeholder={t.config.authHeaderPlaceholder}
+                        className="input-sm"
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleFetchModelsForTarget(idx)}
+                        disabled={!!compareFetchState && compareFetchState.index === idx && compareFetchState.loading}
+                      >
+                        {compareFetchState && compareFetchState.index === idx && compareFetchState.loading
+                          ? t.config.fetchingModels
+                          : t.config.fetchModels}
+                      </button>
+                    </div>
+                    {compareFetchState && compareFetchState.index === idx && !compareFetchState.loading && compareFetchState.options.length > 0 && (
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const picked = e.target.value;
+                          if (!picked) return;
+                          const next = compareTargets.slice();
+                          next[idx] = { ...next[idx], model: picked };
+                          setCompareTargets(next);
+                          setCompareFetchState(null);
+                        }}
+                        className="select-sm"
+                      >
+                        <option value="">{t.config.selectFetchedModel}</option>
+                        {compareFetchState.options.map((mo) => <option key={mo} value={mo}>{mo}</option>)}
+                      </select>
+                    )}
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setCompareTargets((prev) => [...prev, { base_url: config.base_url, model: "", auth_header: config.auth_header || "" }])}
                 >
-                  <option value="">{t.config.selectFetchedModel}</option>
-                  {modelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
-                </select>
-              )}
-            </div>
-          </label>
-          <label className="field">
-            <span className="field-label">{t.config.authHeaderLabel}</span>
-            <input value={config.auth_header || ""} onChange={updateConfig("auth_header")} placeholder={t.config.authHeaderPlaceholder} />
-          </label>
-          <label className="field">
-            <span className="field-label">{t.config.customHeadersLabel}</span>
-            <textarea
-              rows={3}
-              value={config.custom_headers ? JSON.stringify(config.custom_headers, null, 2) : ""}
-              onChange={handleCustomHeadersChange}
-              placeholder='{ "X-Custom-Header": "value" }'
-            />
-          </label>
+                  {t.config.addModel}
+                </button>
+              </div>
+            )}
+          </div>
+          {!multiModelMode && (
+            <>
+              <label className="field">
+                <span className="field-label">{t.config.authHeaderLabel}</span>
+                <input value={config.auth_header || ""} onChange={updateConfig("auth_header")} placeholder={t.config.authHeaderPlaceholder} />
+              </label>
+              <label className="field">
+                <span className="field-label">{t.config.customHeadersLabel}</span>
+                <textarea
+                  rows={3}
+                  value={config.custom_headers ? JSON.stringify(config.custom_headers, null, 2) : ""}
+                  onChange={handleCustomHeadersChange}
+                  placeholder='{ "X-Custom-Header": "value" }'
+                />
+              </label>
+            </>
+          )}
         </div>
 
         <div className="panel-block">
@@ -1084,6 +1405,11 @@ function App() {
 
       <section className="dashboard-panel">
         <div className="progress-card">
+          {batchProgress && (
+            <div className="hint batch-progress-label">
+              {t.config.batchModelLabel(batchProgress.index, batchProgress.total, batchProgress.model)}
+            </div>
+          )}
           <div className="progress-bar-wrap">
             <div className="progress-bar-fill" style={{ width: currentPct + "%" }} />
           </div>
@@ -1153,7 +1479,30 @@ function App() {
   );
 
   // ─── RESULTS view ───────────────────────────────────────────
+  const renderBatchComparisonView = () => (
+    <div className="view">
+      <div className="view-header">
+        <div>
+          <h2>{t.config.modelComparisonTitle}</h2>
+          <p className="view-subtitle">{batchResults.map((b) => b.label).join(" · ")}</p>
+        </div>
+        <div className="view-actions">
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowLogs((v) => !v)}>{showLogs ? t.config.hideLogs : t.config.viewLogs}</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setViewMode("config")}>{t.results.backToConfig}</button>
+        </div>
+      </div>
+
+      <section className="table-card">
+        <h3>{t.config.modelComparisonTitle}</h3>
+        {renderMultiMetricTable(batchResults, t)}
+      </section>
+    </div>
+  );
+
   const renderResultsView = () => {
+    if (batchResults.length > 0) {
+      return renderBatchComparisonView();
+    }
     if (!report) {
       return (
         <div className="view">
@@ -1269,94 +1618,59 @@ function App() {
   };
 
   // ─── HISTORY view ───────────────────────────────────────────
-  const renderHistoryView = () => {
-    const A = selectedReportA;
-    const B = selectedReportB;
-    const compareRows = A ? buildCompareRows(A, B) : [];
-
-    return (
-      <div className="view">
-        <div className="view-header">
-          <div>
-            <h2>{t.history.title}</h2>
-            <p className="view-subtitle">{t.history.subtitle}</p>
-          </div>
-          <div className="view-actions">
-            <button className="btn btn-ghost btn-sm" onClick={handleLoadReports}>{t.history.refreshList}</button>
-            {(A || B) && <button className="btn btn-secondary btn-sm" onClick={clearReportPair}>{t.history.clearComparison}</button>}
-          </div>
+  const renderHistoryView = () => (
+    <div className="view">
+      <div className="view-header">
+        <div>
+          <h2>{t.history.title}</h2>
+          <p className="view-subtitle">{t.history.subtitle}</p>
         </div>
-
-        <section className="table-card">
-          <h3>{t.history.savedReportsTitle}</h3>
-          {reports.length === 0 ? (
-            <p className="empty-hint">{t.history.emptyHint}</p>
-          ) : (
-            <div className="report-list">
-              {reports.map((rep) => (
-                <div className="report-row" key={rep.path}>
-                  <div className="report-row-main">
-                    <span className="report-model">{rep.model}</span>
-                    <span className="report-meta">{t.history.requestsAndTime(rep.num_requests, rep.created_at)}</span>
-                  </div>
-                  <div className="report-row-actions">
-                    <button className="btn btn-primary btn-sm" onClick={() => handleViewReportDetail(rep.path)}>{t.history.viewDetail}</button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => handleLoadReport(rep.path)}>{t.history.loadForCompare}</button>
-                    <button className="btn btn-ghost btn-sm btn-danger-text" onClick={() => handleDeleteSavedReport(rep.path)}>{t.history.delete}</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {A && (
-          <section className="table-card">
-            <h3>{t.history.compareResultTitle}</h3>
-            <div className="compare-hint">
-              <span className="chip chip-static chip-a">A · {A.config.model}</span>
-              {B ? (
-                <span className="chip chip-static chip-b">B · {B.config.model}</span>
-              ) : (
-                <span className="hint">{t.history.selectAnotherHint}</span>
-              )}
-            </div>
-            <div className="table-scroll">
-              <table className="data-table">
-                <thead><tr><th>{t.history.metricCol}</th><th>{t.history.aCol}</th><th>{B ? t.history.bColWithCompare : t.history.bCol}</th></tr></thead>
-                <tbody>
-                  {compareRows.map((row) => {
-                    const aStr = row.a.toFixed(row.digits);
-                    let delta: React.ReactNode = null;
-                    let bStr: string | null = null;
-                    if (row.b !== undefined) {
-                      bStr = row.b.toFixed(row.digits);
-                      const diff = row.b - row.a;
-                      const improved = row.higherIsBetter ? diff > 0 : diff < 0;
-                      const worsened = row.higherIsBetter ? diff < 0 : diff > 0;
-                      const sign = diff > 0 ? "+" : "";
-                      delta = (
-                        <span className={"delta" + (improved ? " delta-good" : worsened ? " delta-bad" : " delta-flat")}>
-                          {sign}{diff.toFixed(row.digits)}
-                        </span>
-                      );
-                    }
-                    return (
-                      <tr key={row.labelKey}>
-                        <td>{t.history[row.labelKey]} <span className="unit-hint">({row.unit})</span></td>
-                        <td>{aStr}</td>
-                        <td>{bStr !== null ? (<>{bStr} {delta}</>) : "-"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
+        <div className="view-actions">
+          <button className="btn btn-ghost btn-sm" onClick={handleLoadReports}>{t.history.refreshList}</button>
+          {selectedHistoryReports.length > 0 && <button className="btn btn-secondary btn-sm" onClick={clearHistorySelection}>{t.history.clearComparison}</button>}
+        </div>
       </div>
-    );
-  };
+
+      <section className="table-card">
+        <h3>{t.history.savedReportsTitle}</h3>
+        {reports.length === 0 ? (
+          <p className="empty-hint">{t.history.emptyHint}</p>
+        ) : (
+          <div className="report-list">
+            {reports.map((rep) => (
+              <div className="report-row" key={rep.path}>
+                <label className="report-row-select">
+                  <input
+                    type="checkbox"
+                    checked={selectedHistoryReports.some((r) => r.path === rep.path)}
+                    onChange={() => handleToggleHistorySelection(rep)}
+                  />
+                </label>
+                <div className="report-row-main">
+                  <span className="report-model">{rep.model}</span>
+                  <span className="report-meta">{t.history.requestsAndTime(rep.num_requests, rep.created_at)}</span>
+                </div>
+                <div className="report-row-actions">
+                  <button className="btn btn-primary btn-sm" onClick={() => handleViewReportDetail(rep.path)}>{t.history.viewDetail}</button>
+                  <button className="btn btn-ghost btn-sm btn-danger-text" onClick={() => handleDeleteSavedReport(rep.path)}>{t.history.delete}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {selectedHistoryReports.length > 0 && (
+        <section className="table-card">
+          <h3>{t.history.compareResultTitle}</h3>
+          <div className="compare-hint">
+            {selectedHistoryReports.map((r) => <span key={r.path} className="chip chip-static">{r.label}</span>)}
+          </div>
+          {renderMultiMetricTable(selectedHistoryReports.map((r) => ({ label: r.label, report: r.report })), t)}
+        </section>
+      )}
+    </div>
+  );
 
   const renderSavePresetModal = () => (
     <div className="modal-backdrop" onClick={() => setShowSavePresetModal(false)}>
@@ -1478,7 +1792,7 @@ function App() {
 
         <nav className="topbar-nav">
           <button className={"nav-tab" + (viewMode === "config" ? " active" : "")} onClick={() => setViewMode("config")}>{t.topbar.tabConfig}</button>
-          <button className={"nav-tab" + (viewMode === "results" ? " active" : "")} disabled={!report} onClick={() => report && setViewMode("results")}>{t.topbar.tabResults}</button>
+          <button className={"nav-tab" + (viewMode === "results" ? " active" : "")} disabled={!report && batchResults.length === 0} onClick={() => (report || batchResults.length > 0) && setViewMode("results")}>{t.topbar.tabResults}</button>
           <button className={"nav-tab" + (viewMode === "history" ? " active" : "")} onClick={openHistory}>{t.topbar.tabHistory}</button>
         </nav>
 

@@ -21,7 +21,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 
 ![Results view](.github/assets/screenshot-results.png)
 
-**History** — browse saved runs and diff two reports side by side
+**History** — browse saved runs and diff any number of them side by side
 
 ![History view](.github/assets/screenshot-history.png)
 
@@ -33,6 +33,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 - Real-time TTFT/TPOT charts that update as requests complete
 - Full report: TTFT / TPOT / end-to-end latency at P50/P90/P95/P99, average throughput, success rate
 - Automatic **cache-defeat marker** injected into every request so results reflect real inference latency, not KV-cache hits from repeated identical prompts
+- Compare multiple models in one batch, each with its own base URL / model / API key — so you can pit different providers against each other, not just different models on the same endpoint — with a side-by-side results table highlighting the best value per metric
 
 **Request configuration**
 - Bearer token / custom Authorization header support
@@ -49,7 +50,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 **Reports & history**
 - Every run auto-saves to disk as JSON
 - Browse past runs and reload any of them into the full results view
-- Side-by-side A/B comparison of two historical reports, with per-metric deltas
+- Side-by-side comparison of any number of historical reports, with per-metric deltas against the best value
 - Export a report as JSON or CSV via the native file dialog
 
 **App**

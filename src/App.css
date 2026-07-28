@@ -698,16 +698,6 @@ select:focus-visible {
   cursor: default;
 }
 
-.chip-a {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.chip-b {
-  border-color: #3b82f6;
-  color: #7fadfa;
-}
-
 /* Multi-turn message list */
 .message-list {
   display: flex;
@@ -723,6 +713,24 @@ select:focus-visible {
 
 .message-content-input {
   flex: 1;
+}
+
+.compare-target-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.compare-target-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px dashed var(--border-subtle);
+}
+
+.compare-target-block:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .panel-actions {
@@ -835,6 +843,10 @@ select:focus-visible {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   padding: var(--space-4);
+}
+
+.batch-progress-label {
+  margin-bottom: var(--space-2);
 }
 
 .progress-bar-wrap {
@@ -1112,6 +1124,11 @@ select:focus-visible {
   color: var(--text-muted);
 }
 
+.best-value {
+  color: var(--status-good);
+  font-weight: 700;
+}
+
 .export-row {
   display: flex;
   gap: var(--space-2);
@@ -1142,8 +1159,15 @@ select:focus-visible {
   flex-wrap: wrap;
 }
 
+.report-row-select {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 .report-row-main {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
 }
