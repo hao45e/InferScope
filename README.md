@@ -34,6 +34,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 - Full report: TTFT / TPOT / end-to-end latency at P50/P90/P95/P99, average throughput, success rate
 - Automatic **cache-defeat marker** injected into every request so results reflect real inference latency, not KV-cache hits from repeated identical prompts
 - Compare multiple models in one batch, each with its own base URL / model / API key — so you can pit different providers against each other, not just different models on the same endpoint — with a side-by-side results table highlighting the best value per metric
+- Concurrency sweep: run one model against a comma-separated list of concurrency levels in one batch, chart throughput vs. latency to find the saturation point
 
 **Request configuration**
 - Bearer token / custom Authorization header support

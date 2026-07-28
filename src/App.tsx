@@ -42,6 +42,7 @@ const GITHUB_URL = "https://github.com/your-org/inferscope";
 // by the existing direct legend labels + data table view).
 const CHART_TTFT = "#3b82f6"; // categorical slot 1 (identity: TTFT series)
 const CHART_TPOT = "#ea580c"; // categorical slot 2 (identity: TPOT series)
+const CHART_THROUGHPUT = "#22c55e"; // categorical slot 3 (identity: throughput series, sweep chart)
 
 // Chart chrome (grid/axis/tooltip) needs separate light/dark values since
 // these are plain hex strings passed straight to recharts props, not CSS
@@ -100,6 +101,8 @@ const logMsg = {
   invokeFailed: (msg: string) => `Invoke failed! See the console for details\n\n${msg}`,
   batchModelStarted: (i: number, n: number, model: string) => `Batch ${i}/${n}: running "${model}"`,
   batchModelDone: (i: number, n: number, model: string) => `Batch ${i}/${n}: "${model}" finished`,
+  sweepStepStarted: (i: number, n: number, c: number) => `Sweep ${i}/${n}: running concurrency=${c}`,
+  sweepStepDone: (i: number, n: number, c: number) => `Sweep ${i}/${n}: concurrency=${c} finished`,
 };
 
 // 跟后端 concurrency_slot() 用的是同一个公式：同一并发槽位号会在不同批次
@@ -189,6 +192,17 @@ function buildMultiCompareRows(reports: BenchReport[]): MultiCompareRow[] {
     { labelKey: "metricE2eP50", unit: "ms", values: reports.map((r) => r.e2e_p50_ms), higherIsBetter: false, digits: 2 },
     { labelKey: "metricE2eP99", unit: "ms", values: reports.map((r) => r.e2e_p99_ms), higherIsBetter: false, digits: 2 },
   ];
+}
+
+// 并发扫描输入框里逗号分隔的字符串是否至少解析出一个合法并发数
+// （正整数）——用来判断 Start Benchmark 按钮该不该置灰。
+function parseSweepLevels(input: string): number[] {
+  return Array.from(new Set(
+    input
+      .split(",")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => Number.isFinite(n) && n > 0),
+  )).sort((a, b) => a - b);
 }
 
 // N 列对比表——多模型批量对比结果页、History 多选对比复用同一份渲染逻辑。
@@ -316,6 +330,13 @@ function App() {
   const [compareFetchState, setCompareFetchState] = useState<{ index: number; loading: boolean; options: string[] } | null>(null);
   const [batchResults, setBatchResults] = useState<{ label: string; report: BenchReport }[]>([]);
   const [batchProgress, setBatchProgress] = useState<{ index: number; total: number; model: string } | null>(null);
+
+  // 并发扫描——同一个模型/端点依次跑一串并发数，画吞吐-延迟曲线找饱和点。
+  // 跟多模型对比是两个互斥的轴（对比模式关掉这个，反之亦然），v0.3.0 先不
+  // 支持两个同时开（那是个二维扫描，复杂度不是一个量级）。
+  const [concurrencySweepMode, setConcurrencySweepMode] = useState(false);
+  const [sweepConcurrencyInput, setSweepConcurrencyInput] = useState("1,2,4,8");
+  const [sweepResults, setSweepResults] = useState<{ concurrency: number; report: BenchReport }[]>([]);
 
   // config presets
   const [presets, setPresets] = useState<string[]>([]);
@@ -620,6 +641,7 @@ function App() {
     setReport(null);
     setBatchResults([]);
     setBatchProgress(null);
+    setSweepResults([]);
     setLogs([logLine("INFO", logMsg.benchStarted())]);
     setShowLogs(true);
 
@@ -694,6 +716,53 @@ function App() {
 
   // 同一套 prompt/参数依次跑一组模型（后端只有一个进程级 CANCEL_FLAG，
   // 没法并行跑多个 start_bench，所以这里严格顺序 await，一个跑完再跑下一个）。
+  // 批量/扫描类场景（多模型对比、并发扫描）共用的"跑一份 config、等它有
+  // 结果"逻辑，从 startMultiModelBench 里提出来，避免每加一种新的批量模式
+  // 就再复制一份几乎一样的 setupListeners/超时保护/错误处理代码。
+  //
+  // 超时保护会真的把 UI 状态拉回 "done"（而不是只打个日志）——不然某一步
+  // 卡住的话，整个批次会一直卡在 "running"，Cancel 键之外没有任何办法脱
+  // 困。invoke 本身没法真的中途掐断，等它最终 resolve/reject 时用返回值里
+  // 的 timedOut 标记短路掉，调用方不应该把这份迟到的结果计入批次。
+  const runOneBenchStep = async (
+    effectiveConfig: BenchConfig,
+  ): Promise<{ report: BenchReport | null; canceled: boolean; timedOut: boolean }> => {
+    let stepReport: BenchReport | null = null;
+    let stepCanceled = false;
+
+    try {
+      await setupListeners(
+        (rep) => { stepReport = rep; },
+        () => { stepCanceled = true; },
+      );
+    } catch (setupErr) {
+      setLogs((l) => [...l, logLine("ERROR", logMsg.listenerInitFailed(String(setupErr)))]);
+      return { report: null, canceled: false, timedOut: false };
+    }
+
+    let timedOut = false;
+    const BENCH_TIMEOUT_MS = 30_000;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      setLogs((l) => [...l, logLine("INFO", logMsg.benchTimedOut(BENCH_TIMEOUT_MS))]);
+      setStatus("done");
+      setViewMode("results");
+    }, BENCH_TIMEOUT_MS);
+
+    try {
+      await invoke("start_bench", { config: effectiveConfig });
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      setLogs((l) => [...l, logLine("ERROR", logMsg.invokeFailed(errMsg))]);
+      clearTimeout(timeoutId);
+      if (!timedOut) await alert(t.config.benchFailedBody(errMsg));
+      return { report: null, canceled: false, timedOut };
+    }
+    clearTimeout(timeoutId);
+
+    return { report: stepReport, canceled: stepCanceled, timedOut };
+  };
+
   const startMultiModelBench = async () => {
     const targets = compareTargets
       .map((tg) => ({ base_url: tg.base_url.trim(), model: tg.model.trim(), auth_header: tg.auth_header.trim() }))
@@ -703,6 +772,7 @@ function App() {
     setStatus("running");
     setReport(null);
     setBatchResults([]);
+    setSweepResults([]);
     setLogs([logLine("INFO", logMsg.benchStarted())]);
     setShowLogs(true);
 
@@ -723,66 +793,65 @@ function App() {
       setMetricsData([]);
       setLogs((l) => [...l, logLine("INFO", logMsg.batchModelStarted(i + 1, targets.length, label))]);
 
-      let modelReport: BenchReport | null = null;
-      let modelCanceled = false;
+      const outcome = await runOneBenchStep({
+        ...baseConfig,
+        base_url: target.base_url,
+        model: target.model,
+        auth_header: target.auth_header || undefined,
+      });
 
-      try {
-        await setupListeners(
-          (rep) => { modelReport = rep; },
-          () => { modelCanceled = true; },
-        );
-      } catch (setupErr) {
-        setLogs((l) => [...l, logLine("ERROR", logMsg.listenerInitFailed(String(setupErr)))]);
-        stoppedEarly = true;
-        break;
-      }
-
-      // 跟单模型那边的超时保护一样，真正把 UI 状态拉回来（而不是只打个日志）
-      // ——不然某个目标卡住的话，整个批次会一直卡在 "running"，Cancel 键之外
-      // 没有任何办法脱困。invoke 本身没法真的中途掐断，等它最终 resolve/reject
-      // 时下面会用 timedOut 这个标记短路掉，不再把这份迟到的结果计进批次里。
-      let timedOut = false;
-      const BENCH_TIMEOUT_MS = 30_000;
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        setLogs((l) => [...l, logLine("INFO", logMsg.benchTimedOut(BENCH_TIMEOUT_MS))]);
-        setStatus("done");
-        setViewMode("results");
-      }, BENCH_TIMEOUT_MS);
-
-      try {
-        await invoke("start_bench", {
-          config: {
-            ...baseConfig,
-            base_url: target.base_url,
-            model: target.model,
-            auth_header: target.auth_header || undefined,
-          },
-        });
-      } catch (e: unknown) {
-        const errMsg = e instanceof Error ? e.message : String(e);
-        setLogs((l) => [...l, logLine("ERROR", logMsg.invokeFailed(errMsg))]);
-        clearTimeout(timeoutId);
-        if (!timedOut) await alert(t.config.benchFailedBody(errMsg));
-        stoppedEarly = true;
-        break;
-      }
-      clearTimeout(timeoutId);
-
-      if (timedOut) {
-        // UI 已经在上面的 setTimeout 里提前跳去 "done" 了，这份迟到的结果
-        // 不再计入批次，也不再继续跑下一个目标，避免用户以为已经结束了，
-        // 结果后台还在悄悄改状态。
-        stoppedEarly = true;
-        break;
-      }
-
-      if (modelReport) {
-        collected.push({ label, report: modelReport });
+      if (outcome.report && !outcome.timedOut) {
+        collected.push({ label, report: outcome.report });
         setBatchResults([...collected]);
         setLogs((l) => [...l, logLine("INFO", logMsg.batchModelDone(i + 1, targets.length, label))]);
       }
-      if (modelCanceled) {
+      if (outcome.canceled || outcome.timedOut) {
+        stoppedEarly = true;
+        break;
+      }
+    }
+
+    setBatchProgress(null);
+    if (!stoppedEarly) {
+      setLogs((l) => [...l, logLine("INFO", logMsg.benchFinished())]);
+    }
+    setStatus("done");
+    setViewMode("results");
+  };
+
+  // 同一个模型/端点依次跑一串并发数（同样严格顺序 await，原因跟多模型批量
+  // 一样：后端只有一个进程级 CANCEL_FLAG）。用来画吞吐-延迟曲线找饱和点。
+  const startConcurrencySweep = async () => {
+    const levels = parseSweepLevels(sweepConcurrencyInput);
+    if (levels.length === 0) return;
+
+    setStatus("running");
+    setReport(null);
+    setBatchResults([]);
+    setSweepResults([]);
+    setLogs([logLine("INFO", logMsg.benchStarted())]);
+    setShowLogs(true);
+
+    const collected: { concurrency: number; report: BenchReport }[] = [];
+    let stoppedEarly = false;
+    const baseConfig = buildEffectiveConfig();
+
+    for (let i = 0; i < levels.length; i++) {
+      const c = levels[i];
+      setBatchProgress({ index: i + 1, total: levels.length, model: String(c) });
+      setCurrentToken("");
+      setProgress({ completed: 0, total: baseConfig.num_requests });
+      setMetricsData([]);
+      setLogs((l) => [...l, logLine("INFO", logMsg.sweepStepStarted(i + 1, levels.length, c))]);
+
+      const outcome = await runOneBenchStep({ ...baseConfig, concurrency: c });
+
+      if (outcome.report && !outcome.timedOut) {
+        collected.push({ concurrency: c, report: outcome.report });
+        setSweepResults([...collected]);
+        setLogs((l) => [...l, logLine("INFO", logMsg.sweepStepDone(i + 1, levels.length, c))]);
+      }
+      if (outcome.canceled || outcome.timedOut) {
         stoppedEarly = true;
         break;
       }
@@ -797,7 +866,9 @@ function App() {
   };
 
   const handleStartClick = () => {
-    if (multiModelMode) {
+    if (concurrencySweepMode) {
+      void startConcurrencySweep();
+    } else if (multiModelMode) {
       void startMultiModelBench();
     } else {
       void startBench();
@@ -874,6 +945,11 @@ function App() {
   // 读盘加载完。
   const handleEnableCompareMode = () => {
     setMultiModelMode(true);
+    // 对比模式和并发扫描是互斥的两个轴，切过去的时候把扫描关掉——不然
+    // handleStartClick 里 concurrencySweepMode 优先判断，扫描开关的勾选框
+    // 在对比模式下又是隐藏的，用户看不见也关不掉，点开始会莫名其妙跑成
+    // 并发扫描而不是多模型对比。
+    setConcurrencySweepMode(false);
     setCompareTargets((prev) => {
       const isPristine = prev.length === 1 && !prev[0].base_url && !prev[0].model && !prev[0].auth_header;
       return isPristine ? [{ base_url: config.base_url, model: "", auth_header: config.auth_header || "" }] : prev;
@@ -996,6 +1072,7 @@ function App() {
       const loaded = await loadReportFromDisk(path);
       setReport(loaded);
       setBatchResults([]);
+      setSweepResults([]);
       setViewMode("results");
     } catch (e) {
       await alert(t.results.loadReportFailed(String(e)));
@@ -1185,7 +1262,10 @@ function App() {
               <button
                 className="btn btn-primary btn-lg"
                 onClick={handleStartClick}
-                disabled={multiModelMode && compareTargets.every((tg) => !tg.model.trim() || !tg.base_url.trim())}
+                disabled={
+                  (multiModelMode && compareTargets.every((tg) => !tg.model.trim() || !tg.base_url.trim())) ||
+                  (concurrencySweepMode && parseSweepLevels(sweepConcurrencyInput).length === 0)
+                }
               >
                 {status === "done" ? t.config.restartBench : t.config.startBench}
               </button>
@@ -1315,10 +1395,28 @@ function App() {
 
         <div className="panel-block">
           <h3 className="panel-block-title">{t.config.sectionLoad}</h3>
+          {!multiModelMode && (
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={concurrencySweepMode}
+                onChange={(e) => setConcurrencySweepMode(e.target.checked)}
+              />
+              {t.config.sweepConcurrencyToggle}
+            </label>
+          )}
           <div className="field-grid">
             <label className="field">
               <span className="field-label">{t.config.concurrency}</span>
-              <input type="number" min="1" max="50" value={config.concurrency} onChange={updateConfig("concurrency")} />
+              {concurrencySweepMode ? (
+                <input
+                  value={sweepConcurrencyInput}
+                  onChange={(e) => setSweepConcurrencyInput(e.target.value)}
+                  placeholder="1,2,4,8,16"
+                />
+              ) : (
+                <input type="number" min="1" max="50" value={config.concurrency} onChange={updateConfig("concurrency")} />
+              )}
             </label>
             <label className="field">
               <span className="field-label">{t.config.numRequests}</span>
@@ -1407,7 +1505,9 @@ function App() {
         <div className="progress-card">
           {batchProgress && (
             <div className="hint batch-progress-label">
-              {t.config.batchModelLabel(batchProgress.index, batchProgress.total, batchProgress.model)}
+              {concurrencySweepMode
+                ? t.config.sweepProgressLabel(batchProgress.index, batchProgress.total, batchProgress.model)
+                : t.config.batchModelLabel(batchProgress.index, batchProgress.total, batchProgress.model)}
             </div>
           )}
           <div className="progress-bar-wrap">
@@ -1499,7 +1599,77 @@ function App() {
     </div>
   );
 
+  const renderSweepView = () => {
+    const chartData = sweepResults.map((s) => ({
+      concurrency: s.concurrency,
+      throughput: s.report.avg_throughput_tok_s,
+      ttft: s.report.ttft_p50_ms,
+    }));
+    return (
+      <div className="view">
+        <div className="view-header">
+          <div>
+            <h2>{t.config.sweepResultsTitle}</h2>
+            <p className="view-subtitle">{sweepResults.map((s) => `c=${s.concurrency}`).join(" · ")}</p>
+          </div>
+          <div className="view-actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowLogs((v) => !v)}>{showLogs ? t.config.hideLogs : t.config.viewLogs}</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => setViewMode("config")}>{t.results.backToConfig}</button>
+          </div>
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-card-header">
+            <h3>{t.config.sweepChartTitle}</h3>
+            <div className="legend">
+              <span className="legend-item"><i className="legend-dot" style={{ background: CHART_THROUGHPUT }} />{t.config.sweepThroughputLegend}</span>
+              <span className="legend-item"><i className="legend-dot" style={{ background: CHART_TTFT }} />TTFT P50</span>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={chartChrome.grid} vertical={false} />
+              <XAxis
+                dataKey="concurrency"
+                stroke={chartChrome.axis}
+                tick={{ fontSize: 12 }}
+                label={{ value: t.config.concurrency, position: "insideBottom", offset: -4, fill: chartChrome.axis, fontSize: 11 }}
+              />
+              <YAxis
+                yAxisId="throughput"
+                stroke={chartChrome.axis}
+                tick={{ fontSize: 11 }}
+                label={{ value: "tokens/s", angle: -90, position: "insideLeft", fill: chartChrome.axis, fontSize: 11 }}
+              />
+              <YAxis
+                yAxisId="latency"
+                orientation="right"
+                stroke={chartChrome.axis}
+                tick={{ fontSize: 11 }}
+                label={{ value: "ms", angle: 90, position: "insideRight", fill: chartChrome.axis, fontSize: 11 }}
+              />
+              <Tooltip
+                contentStyle={{ background: chartChrome.tooltipBg, border: "1px solid " + chartChrome.tooltipBorder, borderRadius: 8, fontSize: 12 }}
+                labelStyle={{ color: chartChrome.tooltipText }}
+              />
+              <Line yAxisId="throughput" type="monotone" dataKey="throughput" stroke={CHART_THROUGHPUT} strokeWidth={2} dot name="Throughput" />
+              <Line yAxisId="latency" type="monotone" dataKey="ttft" stroke={CHART_TTFT} strokeWidth={2} dot name="TTFT P50" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        <section className="table-card">
+          <h3>{t.config.sweepResultsTitle}</h3>
+          {renderMultiMetricTable(sweepResults.map((s) => ({ label: `c=${s.concurrency}`, report: s.report })), t)}
+        </section>
+      </div>
+    );
+  };
+
   const renderResultsView = () => {
+    if (sweepResults.length > 0) {
+      return renderSweepView();
+    }
     if (batchResults.length > 0) {
       return renderBatchComparisonView();
     }
@@ -1792,7 +1962,7 @@ function App() {
 
         <nav className="topbar-nav">
           <button className={"nav-tab" + (viewMode === "config" ? " active" : "")} onClick={() => setViewMode("config")}>{t.topbar.tabConfig}</button>
-          <button className={"nav-tab" + (viewMode === "results" ? " active" : "")} disabled={!report && batchResults.length === 0} onClick={() => (report || batchResults.length > 0) && setViewMode("results")}>{t.topbar.tabResults}</button>
+          <button className={"nav-tab" + (viewMode === "results" ? " active" : "")} disabled={!report && batchResults.length === 0 && sweepResults.length === 0} onClick={() => (report || batchResults.length > 0 || sweepResults.length > 0) && setViewMode("results")}>{t.topbar.tabResults}</button>
           <button className={"nav-tab" + (viewMode === "history" ? " active" : "")} onClick={openHistory}>{t.topbar.tabHistory}</button>
         </nav>
 

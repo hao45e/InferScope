@@ -36,6 +36,11 @@ export interface Translations {
     addModel: string;
     compareTargetsLabel: string;
     modelComparisonTitle: string;
+    sweepConcurrencyToggle: string;
+    sweepResultsTitle: string;
+    sweepChartTitle: string;
+    sweepThroughputLegend: string;
+    sweepProgressLabel: (i: number, n: number, concurrency: string) => string;
     authHeaderLabel: string;
     authHeaderPlaceholder: string;
     customHeadersLabel: string;
@@ -208,6 +213,11 @@ const en: Translations = {
     addModel: "+ Add model",
     compareTargetsLabel: "Models to Compare",
     modelComparisonTitle: "Model Comparison",
+    sweepConcurrencyToggle: "Sweep concurrency levels",
+    sweepResultsTitle: "Concurrency Sweep",
+    sweepChartTitle: "Throughput vs. Latency",
+    sweepThroughputLegend: "Throughput",
+    sweepProgressLabel: (i, n, concurrency) => `Concurrency ${i}/${n}: ${concurrency}`,
     authHeaderLabel: "API Key (optional)",
     authHeaderPlaceholder: "Bearer sk-xxx, or leave blank for no auth",
     customHeadersLabel: "Custom HTTP Headers (JSON, optional)",
@@ -380,6 +390,11 @@ const zhCN: Translations = {
     addModel: "+ 添加模型",
     compareTargetsLabel: "对比模型",
     modelComparisonTitle: "模型对比结果",
+    sweepConcurrencyToggle: "扫描多个并发数",
+    sweepResultsTitle: "并发扫描结果",
+    sweepChartTitle: "吞吐量 vs 延迟",
+    sweepThroughputLegend: "吞吐量",
+    sweepProgressLabel: (i, n, concurrency) => `并发数 ${i}/${n}：${concurrency}`,
     authHeaderLabel: "API 密钥（可选）",
     authHeaderPlaceholder: "Bearer sk-xxx 或留空不使用认证",
     customHeadersLabel: "自定义 HTTP 头（JSON，可选）",
@@ -552,6 +567,11 @@ const zhTW: Translations = {
     addModel: "+ 新增模型",
     compareTargetsLabel: "對比模型",
     modelComparisonTitle: "模型比較結果",
+    sweepConcurrencyToggle: "掃描多個並發數",
+    sweepResultsTitle: "並發掃描結果",
+    sweepChartTitle: "吞吐量 vs 延遲",
+    sweepThroughputLegend: "吞吐量",
+    sweepProgressLabel: (i, n, concurrency) => `並發數 ${i}/${n}：${concurrency}`,
     authHeaderLabel: "API 金鑰（可選）",
     authHeaderPlaceholder: "Bearer sk-xxx 或留空不使用驗證",
     customHeadersLabel: "自訂 HTTP 標頭（JSON，可選）",
