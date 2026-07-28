@@ -42,6 +42,7 @@
 - 单轮或多轮（system/user/assistant）对话测试
 - 从 `.txt` / `.jsonl` 批量导入 Prompt，逐请求循环使用
 - 输入目标 token 数一键生成合成 Prompt（基于分词器，精确匹配 token 数），无需手写固定长度的测试文本
+- 单轮模式下可附加一张本地图片，压测视觉模型
 - 直接从目标服务拉取可用模型列表，不用盲填模型名
 
 **容错与限流**
@@ -115,6 +116,7 @@ inferscope bench --preset my-preset
 | `max_retries` | number | `0` | 单请求最大重试次数 |
 | `request_timeout_ms` | number | `60000` | 单请求超时时间（毫秒） |
 | `messages` | Message[]? | `[]` | 多轮对话消息列表 |
+| `image_data_url` | string? | — | 附加到单轮 prompt 的图片，data URI 格式（`data:image/png;base64,...`） |
 
 ## 输出指标
 

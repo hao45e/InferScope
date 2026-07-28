@@ -30,6 +30,7 @@ tokio = { version = "1", features = ["macros", "sync", "rt-multi-thread", "time"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 tiktoken-rs = "0.12"
+base64 = "0.23"
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }

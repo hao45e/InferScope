@@ -44,6 +44,10 @@ pub struct BenchConfig {
     /// 导入的 prompt 池（循环使用），若非空则每个请求依次从中取一条覆盖 prompt
     #[serde(default)]
     pub prompt_pool: Vec<String>,
+    /// 附加图片（data URI，如 "data:image/png;base64,..."）。仅单轮模式
+    /// 生效——多轮对话的每条消息暂不支持单独附图。
+    #[serde(default)]
+    pub image_data_url: Option<String>,
 }
 
 fn default_timeout() -> u64 {
@@ -225,6 +229,9 @@ fn cache_defeat_marker(request_id: u32) -> String {
 /// 第一条消息的开头会被塞进一段唯一标记，用来打破前缀/KV cache 复用
 /// （见 cache_defeat_marker 的说明）。
 fn build_messages(config: &BenchConfig, request_id: u32) -> Vec<serde_json::Value> {
+    // 附图只在单轮模式下生效（多轮对话的每条历史消息暂不支持单独附图）。
+    let is_single_turn = config.messages.is_empty();
+
     let mut messages: Vec<serde_json::Value> = if !config.messages.is_empty() {
         config
             .messages
@@ -240,11 +247,17 @@ fn build_messages(config: &BenchConfig, request_id: u32) -> Vec<serde_json::Valu
 
     if let Some(first) = messages.first_mut() {
         if let Some(content) = first["content"].as_str() {
-            first["content"] = serde_json::Value::String(format!(
-                "{} {}",
-                cache_defeat_marker(request_id),
-                content
-            ));
+            let text = format!("{} {}", cache_defeat_marker(request_id), content);
+
+            // 附了图片时，content 要从纯字符串换成 OpenAI 视觉接口约定的
+            // 数组形式：[{"type":"text",...}, {"type":"image_url",...}]。
+            first["content"] = match (is_single_turn, &config.image_data_url) {
+                (true, Some(image_url)) => serde_json::json!([
+                    {"type": "text", "text": text},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ]),
+                _ => serde_json::Value::String(text),
+            };
         }
     }
 
@@ -1065,6 +1078,39 @@ pub fn read_file_text(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {e}"))
 }
 
+/// 根据文件扩展名猜测图片的 MIME 类型。只认常见的几种图片格式——宁可
+/// 明确报错，也不要对不认识的扩展名瞎猜一个 MIME 类型（视觉模型服务对
+/// 错误的 MIME 类型的反应从"拒绝"到"错误解析"都有可能，不如提前拦截）。
+fn image_mime_type(path: &std::path::Path) -> Result<&'static str, String> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .ok_or_else(|| "Image file has no extension".to_string())?;
+
+    match ext.as_str() {
+        "png" => Ok("image/png"),
+        "jpg" | "jpeg" => Ok("image/jpeg"),
+        "gif" => Ok("image/gif"),
+        "webp" => Ok("image/webp"),
+        "bmp" => Ok("image/bmp"),
+        other => Err(format!("Unsupported image format: .{other}")),
+    }
+}
+
+/// 读取本地图片文件，编码成 data URI（"data:image/png;base64,..."），
+/// 供附加到单轮 prompt 的请求里一起发给视觉模型。
+#[tauri::command]
+pub fn read_image_as_data_url(path: String) -> Result<String, String> {
+    use base64::Engine;
+
+    let path = std::path::Path::new(&path);
+    let mime = image_mime_type(path)?;
+    let bytes = std::fs::read(path).map_err(|e| format!("Failed to read image file: {e}"))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
+}
+
 /// 导出报告为 JSON/CSV（保留原功能）
 #[tauri::command]
 pub fn export_report(report_json: &str, format: String, path: String) -> Result<(), String> {
@@ -1125,6 +1171,7 @@ mod tests {
             request_timeout_ms: 60000,
             messages: vec![],
             prompt_pool: vec![],
+            image_data_url: None,
         }
     }
 
@@ -1318,6 +1365,58 @@ mod tests {
     }
 
     #[test]
+    fn test_image_mime_type_recognizes_common_extensions() {
+        assert_eq!(image_mime_type(std::path::Path::new("photo.png")), Ok("image/png"));
+        assert_eq!(image_mime_type(std::path::Path::new("photo.PNG")), Ok("image/png"));
+        assert_eq!(image_mime_type(std::path::Path::new("photo.jpg")), Ok("image/jpeg"));
+        assert_eq!(image_mime_type(std::path::Path::new("photo.jpeg")), Ok("image/jpeg"));
+        assert_eq!(image_mime_type(std::path::Path::new("photo.gif")), Ok("image/gif"));
+        assert_eq!(image_mime_type(std::path::Path::new("photo.webp")), Ok("image/webp"));
+        assert_eq!(image_mime_type(std::path::Path::new("photo.bmp")), Ok("image/bmp"));
+    }
+
+    #[test]
+    fn test_image_mime_type_rejects_unsupported_extension() {
+        let err = image_mime_type(std::path::Path::new("document.pdf")).unwrap_err();
+        assert!(err.contains("Unsupported image format"));
+    }
+
+    #[test]
+    fn test_image_mime_type_rejects_no_extension() {
+        let err = image_mime_type(std::path::Path::new("noext")).unwrap_err();
+        assert!(err.contains("no extension"));
+    }
+
+    #[test]
+    fn test_read_image_as_data_url_round_trips_real_bytes() {
+        use base64::Engine;
+
+        let dir = std::env::temp_dir().join(format!("inferscope_test_img_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join("test.png");
+        // Not a real PNG — read_image_as_data_url only cares about bytes +
+        // extension, not that it decodes as a valid image.
+        let original_bytes: &[u8] = b"\x89PNG\r\n\x1a\nfake-png-bytes-for-testing";
+        std::fs::write(&file_path, original_bytes).unwrap();
+
+        let data_url = read_image_as_data_url(file_path.to_string_lossy().to_string())
+            .expect("should read and encode the file");
+
+        assert!(data_url.starts_with("data:image/png;base64,"));
+        let b64_part = data_url.strip_prefix("data:image/png;base64,").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD.decode(b64_part).unwrap();
+        assert_eq!(decoded, original_bytes);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_read_image_as_data_url_missing_file() {
+        let err = read_image_as_data_url("/nonexistent/path/photo.png".to_string()).unwrap_err();
+        assert!(err.contains("Failed to read image file"));
+    }
+
+    #[test]
     fn test_build_messages_uses_multiturn_when_present() {
         let mut config = make_config();
         config.messages = vec![
@@ -1352,6 +1451,45 @@ mod tests {
         let msgs = build_messages(&config, 1);
         assert_eq!(msgs.len(), 1);
         assert!(msgs[0]["content"].as_str().unwrap().ends_with(&config.prompt));
+    }
+
+    #[test]
+    fn test_build_messages_attaches_image_in_single_turn_mode() {
+        let mut config = make_config();
+        config.image_data_url = Some("data:image/png;base64,AAAA".to_string());
+
+        let msgs = build_messages(&config, 1);
+        assert_eq!(msgs.len(), 1);
+        let content = msgs[0]["content"].as_array().expect("content should be an array when an image is attached");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert!(content[0]["text"].as_str().unwrap().ends_with(&config.prompt));
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(content[1]["image_url"]["url"], "data:image/png;base64,AAAA");
+    }
+
+    #[test]
+    fn test_build_messages_attaches_image_with_prompt_pool() {
+        let mut config = make_config();
+        config.prompt_pool = vec!["a".to_string(), "b".to_string()];
+        config.image_data_url = Some("data:image/png;base64,AAAA".to_string());
+
+        let msgs = build_messages(&config, 1);
+        let content = msgs[0]["content"].as_array().expect("prompt pool should also get the image in single-turn mode");
+        assert!(content[0]["text"].as_str().unwrap().ends_with('a'));
+        assert_eq!(content[1]["type"], "image_url");
+    }
+
+    #[test]
+    fn test_build_messages_ignores_image_in_multi_turn_mode() {
+        let mut config = make_config();
+        config.messages = vec![Message { role: "user".to_string(), content: "hi".to_string() }];
+        config.image_data_url = Some("data:image/png;base64,AAAA".to_string());
+
+        let msgs = build_messages(&config, 1);
+        // Multi-turn mode is out of scope for image attachment — content
+        // should stay a plain string, not switch to the array shape.
+        assert!(msgs[0]["content"].is_string());
     }
 
     #[test]
@@ -1612,6 +1750,37 @@ mod tests {
         assert!(
             body.contains("[bench-"),
             "the actual HTTP request body must carry the cache-defeat marker, got: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attached_image_reaches_real_request_body() {
+        let sse_payloads = vec![
+            r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}"#.to_string(),
+            "[DONE]".to_string(),
+        ];
+        let (port, rx) = spawn_mock_sse_server_capturing_request(sse_payloads).await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.image_data_url = Some("data:image/png;base64,AAAA".to_string());
+
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+        let _ = run_request_inner(&handle, &config, 1).await;
+
+        let request_text = rx.await.expect("mock server should have captured a request");
+        let body = request_text
+            .split("\r\n\r\n")
+            .nth(1)
+            .expect("request should have a body after the header blank line");
+        assert!(
+            body.contains(r#""type":"image_url""#) && body.contains("data:image/png;base64,AAAA"),
+            "the actual HTTP request body must carry the attached image, got: {body}"
+        );
+        assert!(
+            body.contains("[bench-"),
+            "the cache-defeat marker must still be present when an image is attached, got: {body}"
         );
     }
 

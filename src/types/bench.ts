@@ -15,6 +15,7 @@ export interface BenchConfig {
   request_timeout_ms: number;
   messages?: Message[];
   prompt_pool?: string[];
+  image_data_url?: string | null;
 }
 
 // 对话消息

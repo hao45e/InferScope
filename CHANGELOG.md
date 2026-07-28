@@ -13,13 +13,19 @@ MINOR per [RELEASING.md](./RELEASING.md)).
 
 | Version | Planned | Why here |
 |---|---|---|
-| v0.6.0 (if needed) | Multimodal (image input) benchmarking | Only if there's real demand for testing vision models — lowest priority, may be skipped |
 | v1.0.0 | No new features — freeze `BenchConfig`/report schema as a stable API, docs pass | Marks that the core surface (fixed concurrency, sweep, multi-model, CLI) is complete and stable |
 
 ## [Unreleased]
 
 ### Added
 
+- Image input benchmarking: attach a local image to a single-turn prompt
+  (base64-encoded as a data URI, sent as the OpenAI-compatible
+  `image_url` content part alongside the text) to benchmark vision
+  models. Not supported in multi-turn mode. Uses the exact same
+  streaming/metrics engine as text-only prompts — TTFT/TPOT/throughput
+  are measured identically.
+  ([#6](https://github.com/hao45e/InferScope/issues/6))
 - Headless/CLI mode: `inferscope bench (--config <path.json> | --preset <name>) [--output <path.json>]`
   runs a benchmark without opening the GUI and prints the full report as
   JSON to stdout (optionally also to a file), for scripting into CI
