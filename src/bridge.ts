@@ -14,7 +14,7 @@ class InMemoryBridge {
   private _listeners = new Map<string, Set<ListenerCB>>();
   private _benchState = { running: false, canceled: false };
   private _reports: MockReport[] = [];
-  private _importedFiles = new Map<string, string>();
+  private _importedFiles = new Map<string, File>();
   private _presets = new Map<string, Record<string, unknown>>();
 
   async invoke(cmd: string, args: Record<string, unknown>): Promise<unknown> {
@@ -105,7 +105,19 @@ class InMemoryBridge {
         return undefined;
       case "read_file_text": {
         const path = (args as any).path as string;
-        return this._importedFiles.get(path) ?? "// Mock mode: use the import feature to pick a .txt or .jsonl file";
+        const file = this._importedFiles.get(path);
+        return file ? await file.text() : "// Mock mode: use the import feature to pick a .txt or .jsonl file";
+      }
+      case "read_image_as_data_url": {
+        const path = (args as any).path as string;
+        const file = this._importedFiles.get(path);
+        if (!file) throw new Error("File not found (mock mode)");
+        return await new Promise<string>((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result as string);
+          r.onerror = () => reject(r.error ?? new Error("Failed to read image file"));
+          r.readAsDataURL(file);
+        });
       }
       case "list_remote_models":
         console.log("[Mock] Simulating model list fetch for", args.baseUrl);
@@ -222,23 +234,22 @@ class InMemoryBridge {
     return name ? `mock://${name}` : null;
   }
 
-  async open(_opts?: Record<string, unknown>): Promise<string | null> {
+  async open(opts?: { filters?: { name: string; extensions: string[] }[] }): Promise<string | null> {
     return new Promise((resolve) => {
       const input = document.createElement("input");
       input.type = "file";
-      input.accept = ".txt,.jsonl,.json";
+      input.accept = opts?.filters
+        ? opts.filters.flatMap((f) => f.extensions.map((ext) => `.${ext}`)).join(",")
+        : ".txt,.jsonl,.json";
       input.onchange = () => {
         const file = input.files?.[0];
         if (!file) { resolve(null); return; }
-        const r = new FileReader();
-        r.onload = () => {
-          // 模拟模式下浏览器不暴露真实文件路径，用文件名当作 "path"，
-          // 内容暂存起来供后续 read_file_text 取回
-          const mockPath = `mock://${file.name}`;
-          this._importedFiles.set(mockPath, r.result as string);
-          resolve(mockPath);
-        };
-        r.readAsText(file);
+        // 模拟模式下浏览器不暴露真实文件路径，用文件名当作 "path"；文件
+        // 本身先存起来，具体怎么读（当文本还是当图片编码成 data URL）留给
+        // 后续调用的具体命令（read_file_text / read_image_as_data_url）决定。
+        const mockPath = `mock://${file.name}`;
+        this._importedFiles.set(mockPath, file);
+        resolve(mockPath);
       };
       input.click();
     });

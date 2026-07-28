@@ -42,6 +42,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 - Single-turn or multi-turn (system/user/assistant) conversation testing
 - Bulk prompt import from `.txt` / `.jsonl`, cycled one-per-request
 - Generate a synthetic prompt with an exact target token count (tokenizer-backed), for fixed-length input testing without hand-crafting prompts
+- Attach a local image to a single-turn prompt to benchmark vision models
 - Fetch the live model list from the target server instead of typing the model name blind
 
 **Reliability controls**
@@ -115,6 +116,7 @@ inferscope bench --preset my-preset
 | `max_retries` | number | `0` | Max retries per request |
 | `request_timeout_ms` | number | `60000` | Per-request timeout (ms) |
 | `messages` | Message[]? | `[]` | Multi-turn conversation messages |
+| `image_data_url` | string? | — | Image as a data URI (`data:image/png;base64,...`) attached to a single-turn prompt |
 
 ## Metrics
 

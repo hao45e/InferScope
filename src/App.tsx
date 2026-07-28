@@ -320,6 +320,9 @@ function App() {
   const [syntheticTokenTarget, setSyntheticTokenTarget] = useState("200");
   const [generatingSyntheticPrompt, setGeneratingSyntheticPrompt] = useState(false);
 
+  // 附加图片——仅单轮模式生效，测视觉模型
+  const [attachingImage, setAttachingImage] = useState(false);
+
   // 多模型对比——每个对比目标都有自己独立的 base_url/model/auth_header，
   // 所以能跨厂商对比，不只是同一个端点下比较不同模型。其余参数（并发数、
   // prompt、自定义 headers 等）还是从主表单共用。
@@ -1001,6 +1004,27 @@ function App() {
     }
   };
 
+  const handleAttachImage = async () => {
+    try {
+      const result = await open({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }],
+      });
+      if (!result) return;
+      setAttachingImage(true);
+      const dataUrl = await invoke<string>("read_image_as_data_url", { path: String(result) });
+      setConfig((c) => ({ ...c, image_data_url: dataUrl }));
+    } catch (e) {
+      await alert(t.config.attachImageFailed(String(e)));
+    } finally {
+      setAttachingImage(false);
+    }
+  };
+
+  const handleRemoveImage = () => {
+    setConfig((c) => ({ ...c, image_data_url: null }));
+  };
+
   const handleOpenSavePresetModal = () => {
     setPresetPickerOpen(false);
     setPresetNameInput(selectedPresetName || "");
@@ -1502,6 +1526,24 @@ function App() {
                 >
                   {generatingSyntheticPrompt ? t.config.generatingSyntheticPrompt : t.config.generateSyntheticPrompt}
                 </button>
+              </div>
+              <div className="field-row-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleAttachImage}
+                  disabled={attachingImage}
+                >
+                  {attachingImage ? t.config.attachingImage : t.config.attachImage}
+                </button>
+                {config.image_data_url && (
+                  <span className="image-attachment-preview">
+                    <img src={config.image_data_url} alt="" className="image-attachment-thumb" />
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={handleRemoveImage}>
+                      {t.config.removeImage}
+                    </button>
+                  </span>
+                )}
               </div>
               {importedPrompts.length > 0 && (
                 <label className="checkbox-field">

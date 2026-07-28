@@ -183,6 +183,7 @@ pub fn run() {
             bench::load_report,
             bench::delete_report,
             bench::read_file_text,
+            bench::read_image_as_data_url,
             bench::list_remote_models,
             synthetic_prompt::generate_synthetic_prompt_cmd,
             settings::save_app_settings,

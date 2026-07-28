@@ -63,6 +63,10 @@ export interface Translations {
     generateSyntheticPrompt: string;
     generatingSyntheticPrompt: string;
     syntheticPromptFailed: (msg: string) => string;
+    attachImage: string;
+    attachingImage: string;
+    removeImage: string;
+    attachImageFailed: (msg: string) => string;
     cyclePrompts: string;
     roleSystem: string;
     roleUser: string;
@@ -245,6 +249,10 @@ const en: Translations = {
     generateSyntheticPrompt: "Generate Synthetic Prompt",
     generatingSyntheticPrompt: "Generating…",
     syntheticPromptFailed: (msg) => `Failed to generate synthetic prompt: ${msg}`,
+    attachImage: "Attach Image",
+    attachingImage: "Attaching…",
+    removeImage: "Remove",
+    attachImageFailed: (msg) => `Failed to attach image: ${msg}`,
     cyclePrompts: "Cycle through imported prompts (one per request)",
     roleSystem: "system",
     roleUser: "user",
@@ -427,6 +435,10 @@ const zhCN: Translations = {
     generateSyntheticPrompt: "生成合成 Prompt",
     generatingSyntheticPrompt: "生成中…",
     syntheticPromptFailed: (msg) => `生成合成 Prompt 失败：${msg}`,
+    attachImage: "附加图片",
+    attachingImage: "附加中…",
+    removeImage: "移除",
+    attachImageFailed: (msg) => `附加图片失败：${msg}`,
     cyclePrompts: "循环使用导入的 Prompt（每个请求使用下一条）",
     roleSystem: "system",
     roleUser: "user",
@@ -609,6 +621,10 @@ const zhTW: Translations = {
     generateSyntheticPrompt: "產生合成 Prompt",
     generatingSyntheticPrompt: "產生中…",
     syntheticPromptFailed: (msg) => `產生合成 Prompt 失敗：${msg}`,
+    attachImage: "附加圖片",
+    attachingImage: "附加中…",
+    removeImage: "移除",
+    attachImageFailed: (msg) => `附加圖片失敗：${msg}`,
     cyclePrompts: "循環使用匯入的 Prompt（每個請求使用下一條）",
     roleSystem: "system",
     roleUser: "user",
