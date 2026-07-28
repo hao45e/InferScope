@@ -37,6 +37,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 - Concurrency sweep: run one model against a comma-separated list of concurrency levels in one batch, chart throughput vs. latency to find the saturation point
 
 **Request configuration**
+- Save/load named configuration presets — capture the whole form (connection, load parameters, prompt) and switch between them from a compact picker
 - Bearer token / custom Authorization header support
 - Arbitrary custom HTTP headers (JSON)
 - Single-turn or multi-turn (system/user/assistant) conversation testing
@@ -117,6 +118,24 @@ inferscope bench --preset my-preset
 | `request_timeout_ms` | number | `60000` | Per-request timeout (ms) |
 | `messages` | Message[]? | `[]` | Multi-turn conversation messages |
 | `image_data_url` | string? | — | Image as a data URI (`data:image/png;base64,...`) attached to a single-turn prompt |
+
+## Stability
+
+As of v1.0, `BenchConfig` (the shape above — used by presets, `last_config.json`,
+saved reports, and the CLI's `--config` file) and `BenchReport` (the shape of
+every saved report and the CLI's JSON output) are a stable API:
+
+- New fields are added as optional with a default — never required. Config
+  and report files written by an older version keep working with newer ones.
+- A field is never removed, renamed, or repurposed within a MINOR/PATCH
+  release. That kind of change is a breaking change (see
+  [CONTRIBUTING.md](./CONTRIBUTING.md)) and bumps MAJOR (MINOR pre-1.0, per
+  [RELEASING.md](./RELEASING.md)).
+- The table above is the source of truth for the current field list — no
+  separate schema file to keep in sync.
+
+Because changes are strictly additive, saved presets/reports and CI configs
+don't need their own version marker to stay readable across app versions.
 
 ## Metrics
 

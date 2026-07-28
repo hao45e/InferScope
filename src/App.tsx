@@ -259,6 +259,15 @@ function renderMultiMetricTable(entries: { label: string; report: BenchReport }[
 // ─── App ──────────────────────────────────────────────────────
 type ViewMode = "config" | "results" | "history";
 
+// 单次跑/多模型对比批量跑/并发扫描批量跑——三种结果互斥，同一时刻只有
+// 一种在展示。用可辨识联合类型表示，而不是三个各自可空的 state，这样
+// "当前到底是哪种结果"由类型系统保证只有一个成立，不用在每处 setter
+// 手动记得把另外两个清空。
+type ResultState =
+  | { kind: "single"; report: BenchReport }
+  | { kind: "batch"; results: { label: string; report: BenchReport }[] }
+  | { kind: "sweep"; results: { concurrency: number; report: BenchReport }[] };
+
 function App() {
   // config
   const [config, setConfig] = useState<BenchConfig>({
@@ -291,7 +300,7 @@ function App() {
   const [currentToken, setCurrentToken] = useState("");
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
   const [metricsData, setMetricsData] = useState<{ x: number; ttft: number; tpot: number }[]>([]);
-  const [report, setReport] = useState<BenchReport | null>(null);
+  const [result, setResult] = useState<ResultState | null>(null);
   const unlistenRef = useRef<(() => void)[]>([]);
 
   // log state
@@ -336,7 +345,6 @@ function App() {
     { base_url: "", model: "", auth_header: "" },
   ]);
   const [compareFetchState, setCompareFetchState] = useState<{ index: number; loading: boolean; options: string[] } | null>(null);
-  const [batchResults, setBatchResults] = useState<{ label: string; report: BenchReport }[]>([]);
   const [batchProgress, setBatchProgress] = useState<{ index: number; total: number; model: string } | null>(null);
 
   // 并发扫描——同一个模型/端点依次跑一串并发数，画吞吐-延迟曲线找饱和点。
@@ -344,7 +352,6 @@ function App() {
   // 支持两个同时开（那是个二维扫描，复杂度不是一个量级）。
   const [concurrencySweepMode, setConcurrencySweepMode] = useState(false);
   const [sweepConcurrencyInput, setSweepConcurrencyInput] = useState("1,2,4,8");
-  const [sweepResults, setSweepResults] = useState<{ concurrency: number; report: BenchReport }[]>([]);
 
   // config presets
   const [presets, setPresets] = useState<string[]>([]);
@@ -543,7 +550,7 @@ function App() {
       if (onDone) {
         onDone(safeReport);
       } else {
-        setReport(safeReport);
+        setResult({ kind: "single", report: safeReport });
         setStatus("done");
         setViewMode("results");
       }
@@ -646,10 +653,8 @@ function App() {
     setCurrentToken("");
     setProgress({ completed: 0, total: config.num_requests });
     setMetricsData([]);
-    setReport(null);
-    setBatchResults([]);
+    setResult(null);
     setBatchProgress(null);
-    setSweepResults([]);
     setLogs([logLine("INFO", logMsg.benchStarted())]);
     setShowLogs(true);
 
@@ -778,9 +783,7 @@ function App() {
     if (targets.length === 0) return;
 
     setStatus("running");
-    setReport(null);
-    setBatchResults([]);
-    setSweepResults([]);
+    setResult(null);
     setLogs([logLine("INFO", logMsg.benchStarted())]);
     setShowLogs(true);
 
@@ -810,7 +813,7 @@ function App() {
 
       if (outcome.report && !outcome.timedOut) {
         collected.push({ label, report: outcome.report });
-        setBatchResults([...collected]);
+        setResult({ kind: "batch", results: [...collected] });
         setLogs((l) => [...l, logLine("INFO", logMsg.batchModelDone(i + 1, targets.length, label))]);
       }
       if (outcome.canceled || outcome.timedOut) {
@@ -834,9 +837,7 @@ function App() {
     if (levels.length === 0) return;
 
     setStatus("running");
-    setReport(null);
-    setBatchResults([]);
-    setSweepResults([]);
+    setResult(null);
     setLogs([logLine("INFO", logMsg.benchStarted())]);
     setShowLogs(true);
 
@@ -856,7 +857,7 @@ function App() {
 
       if (outcome.report && !outcome.timedOut) {
         collected.push({ concurrency: c, report: outcome.report });
-        setSweepResults([...collected]);
+        setResult({ kind: "sweep", results: [...collected] });
         setLogs((l) => [...l, logLine("INFO", logMsg.sweepStepDone(i + 1, levels.length, c))]);
       }
       if (outcome.canceled || outcome.timedOut) {
@@ -884,7 +885,8 @@ function App() {
   };
 
   const handleExport = async (format: "json" | "csv") => {
-    if (!report) return;
+    if (result?.kind !== "single") return;
+    const report = result.report;
     try {
       const path = await save({
         filters: [{ name: format.toUpperCase(), extensions: [format] }],
@@ -1113,9 +1115,7 @@ function App() {
   const handleViewReportDetail = async (path: string) => {
     try {
       const loaded = await loadReportFromDisk(path);
-      setReport(loaded);
-      setBatchResults([]);
-      setSweepResults([]);
+      setResult({ kind: "single", report: loaded });
       setViewMode("results");
     } catch (e) {
       await alert(t.results.loadReportFailed(String(e)));
@@ -1615,10 +1615,10 @@ function App() {
             <span className="stat-value">{lastMetric ? lastMetric.tpot.toFixed(2) : "–"}</span>
             <span className="stat-unit">ms</span>
           </div>
-          {report && (
+          {result?.kind === "single" && (
             <div className="stat-tile accent">
               <span className="stat-label">{t.config.avgThroughput}</span>
-              <span className="stat-value">{report.avg_throughput_tok_s.toFixed(1)}</span>
+              <span className="stat-value">{result.report.avg_throughput_tok_s.toFixed(1)}</span>
               <span className="stat-unit">tokens/s</span>
             </div>
           )}
@@ -1660,7 +1660,7 @@ function App() {
   );
 
   // ─── RESULTS view ───────────────────────────────────────────
-  const renderBatchComparisonView = () => (
+  const renderBatchComparisonView = (batchResults: { label: string; report: BenchReport }[]) => (
     <div className="view">
       <div className="view-header">
         <div>
@@ -1683,7 +1683,7 @@ function App() {
     </div>
   );
 
-  const renderSweepView = () => {
+  const renderSweepView = (sweepResults: { concurrency: number; report: BenchReport }[]) => {
     const chartData = sweepResults.map((s) => ({
       concurrency: s.concurrency,
       throughput: s.report.avg_throughput_tok_s,
@@ -1754,20 +1754,20 @@ function App() {
   };
 
   const renderResultsView = () => {
-    if (sweepResults.length > 0) {
-      return renderSweepView();
-    }
-    if (batchResults.length > 0) {
-      return renderBatchComparisonView();
-    }
-    if (!report) {
+    if (!result) {
       return (
         <div className="view">
           <p className="empty-hint">{t.results.emptyHint}</p>
         </div>
       );
     }
-    const r = report;
+    if (result.kind === "sweep") {
+      return renderSweepView(result.results);
+    }
+    if (result.kind === "batch") {
+      return renderBatchComparisonView(result.results);
+    }
+    const r = result.report;
     const pctData = [
       { name: "TTFT", p50: r.ttft_p50_ms, p90: r.ttft_p90_ms, p95: r.ttft_p95_ms, p99: r.ttft_p99_ms },
       { name: "TPOT", p50: r.tpot_p50_ms, p90: r.tpot_p90_ms, p95: r.tpot_p95_ms, p99: r.tpot_p99_ms },
@@ -2053,7 +2053,7 @@ function App() {
 
         <nav className="topbar-nav">
           <button className={"nav-tab" + (viewMode === "config" ? " active" : "")} onClick={() => setViewMode("config")}>{t.topbar.tabConfig}</button>
-          <button className={"nav-tab" + (viewMode === "results" ? " active" : "")} disabled={!report && batchResults.length === 0 && sweepResults.length === 0} onClick={() => (report || batchResults.length > 0 || sweepResults.length > 0) && setViewMode("results")}>{t.topbar.tabResults}</button>
+          <button className={"nav-tab" + (viewMode === "results" ? " active" : "")} disabled={!result} onClick={() => result && setViewMode("results")}>{t.topbar.tabResults}</button>
           <button className={"nav-tab" + (viewMode === "history" ? " active" : "")} onClick={openHistory}>{t.topbar.tabHistory}</button>
         </nav>
 
