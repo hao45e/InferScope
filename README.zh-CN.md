@@ -59,14 +59,14 @@
 
 **应用本身**
 - 界面语言：English（默认）、简体中文、繁體中文
-- 外观主题：浅色 / 深灰色 / 跟随系统
+- 外观主题：浅色 / 深色 / 跟随系统
 - 分级日志面板（Debug/Info/Warn/Error），支持搜索和导出
 - 应用内检查更新（对接 GitHub Releases）
 
 ## 系统要求
 
 - macOS 12+ / Windows 10+ / Linux（GTK3）
-- [Rust](https://rustup.rs) 1.75+
+- [Rust](https://rustup.rs) 1.85+（`tiktoken-rs` 这个依赖要求的最低版本）
 - Node.js 18+ 和 [pnpm](https://pnpm.io) 8+
 
 ## 快速开始
@@ -176,7 +176,7 @@ inferscope bench --preset my-preset
 欢迎提交 Issue 和 PR。提交改动前请确保：
 
 ```bash
-cd src-tauri && cargo test && cargo clippy   # 要求零警告
+cd src-tauri && cargo test && cargo clippy --all-targets --all-features -- -D warnings
 npx tsc --noEmit
 ```
 

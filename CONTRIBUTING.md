@@ -3,7 +3,7 @@
 ## Before you open a PR
 
 ```bash
-cd src-tauri && cargo test && cargo clippy   # must be zero warnings
+cd src-tauri && cargo test && cargo clippy --all-targets --all-features -- -D warnings
 npx tsc --noEmit
 ```
 

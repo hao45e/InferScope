@@ -66,7 +66,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 ## Requirements
 
 - macOS 12+, Windows 10+, or Linux (GTK3)
-- [Rust](https://rustup.rs) 1.75+
+- [Rust](https://rustup.rs) 1.85+ (required by the `tiktoken-rs` dependency)
 - Node.js 18+ and [pnpm](https://pnpm.io) 8+
 
 ## Getting started
@@ -177,7 +177,7 @@ Yes — `pnpm tauri build` produces a native installer for whichever platform yo
 Issues and pull requests are welcome. Before submitting a change:
 
 ```bash
-cd src-tauri && cargo test && cargo clippy   # must be zero warnings
+cd src-tauri && cargo test && cargo clippy --all-targets --all-features -- -D warnings
 npx tsc --noEmit
 ```
 
