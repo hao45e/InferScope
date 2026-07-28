@@ -52,6 +52,10 @@ MINOR per [RELEASING.md](./RELEASING.md)).
   internal scrollbar. ([#13](https://github.com/hao45e/InferScope/issues/13))
 - Settings' dark theme option was labeled "深灰色" (dark gray) instead of
   "深色" (dark) in both Chinese translations.
+- The topbar brand mark next to "InferScope" was a plain CSS gradient
+  square that never got updated when the app icon itself was redesigned;
+  it now renders the actual pulse/waveform icon.
+  ([#18](https://github.com/hao45e/InferScope/issues/18))
 
 ## [0.2.0] - 2026-07-28
 
