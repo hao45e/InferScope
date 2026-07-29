@@ -16,6 +16,7 @@ export interface BenchConfig {
   messages?: Message[];
   prompt_pool?: string[];
   image_data_url?: string | null;
+  warmup_requests?: number;
 }
 
 // 对话消息

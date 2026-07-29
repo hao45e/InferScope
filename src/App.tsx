@@ -295,6 +295,7 @@ function App() {
     max_retries: 0,
     request_timeout_ms: 60000,
     messages: [],
+    warmup_requests: 0,
   });
 
   // dashboard state
@@ -657,7 +658,8 @@ function App() {
           key === "batch_interval_ms" ||
           key === "per_request_interval_ms" ||
           key === "max_retries" ||
-          key === "request_timeout_ms"
+          key === "request_timeout_ms" ||
+          key === "warmup_requests"
             ? Number(value)
             : value,
       }));
@@ -1555,6 +1557,10 @@ function App() {
             <label className="field">
               <span className="field-label">{t.config.temperature}</span>
               <input type="number" min="0" max="2" step="0.1" value={config.temperature} onChange={updateConfig("temperature")} />
+            </label>
+            <label className="field">
+              <span className="field-label">{t.config.warmupRequests}</span>
+              <input type="number" min="0" value={config.warmup_requests ?? 0} onChange={updateConfig("warmup_requests")} />
             </label>
           </div>
         </div>

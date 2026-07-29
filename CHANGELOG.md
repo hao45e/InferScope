@@ -12,7 +12,6 @@ provisional and may shift as work lands.
 
 | Version | Planned | Why here |
 |---|---|---|
-| v1.3.0 | Warmup requests excluded from statistics ([#33](https://github.com/hao45e/InferScope/issues/33)) | Avoids one-time connection-establishment/cold-start costs skewing the reported percentiles |
 | v1.3.0 | Rate-based (open-loop) load generation mode, alongside the existing concurrency-based mode ([#34](https://github.com/hao45e/InferScope/issues/34)) | Closed-loop concurrency doesn't model real production traffic arrival patterns; matches what genai-perf/aiperf support |
 | v1.4.0 | Embeddings/reranking endpoint benchmarking ([#35](https://github.com/hao45e/InferScope/issues/35)) | Closes a coverage gap vs. genai-perf; designed to be purely additive to the schema so it doesn't need a MAJOR bump |
 
@@ -23,6 +22,17 @@ needs an image-gallery results view instead of a token stream) and
 would be closer to a second product than an extension of this one.
 
 ## [Unreleased]
+
+### Added
+
+- Warmup requests: a new `warmup_requests` field (default 0) runs that
+  many requests against the target before the counted batch starts,
+  discarding their results entirely. Excludes one-time costs
+  (connection establishment, first-request compilation/cache effects)
+  from the reported percentiles. Warmup requests still get the
+  cache-defeat marker and go through the same retry logic as counted
+  requests — the only difference is they aren't in the report.
+  ([#33](https://github.com/hao45e/InferScope/issues/33))
 
 ## [1.2.0] - 2026-07-29
 

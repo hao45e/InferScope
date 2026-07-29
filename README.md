@@ -50,6 +50,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 - Per-batch and per-request delay (rate limiting)
 - Configurable retry count with exponential backoff
 - Cancel a run at any time — in-flight requests stop cleanly
+- Warmup requests excluded from the report, to avoid one-time connection/cold-start costs skewing the percentiles
 
 **Reports & history**
 - Every run auto-saves to disk as JSON
@@ -126,6 +127,7 @@ Checks every TTFT/TPOT/E2E percentile plus average throughput and success rate; 
 | `request_timeout_ms` | number | `60000` | Per-request timeout (ms) |
 | `messages` | Message[]? | `[]` | Multi-turn conversation messages |
 | `image_data_url` | string? | — | Image as a data URI (`data:image/png;base64,...`) attached to a single-turn prompt |
+| `warmup_requests` | number | `0` | Requests to run (and discard) before the counted batch starts |
 
 ## Stability
 

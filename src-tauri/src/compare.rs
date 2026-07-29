@@ -335,6 +335,7 @@ mod tests {
                 messages: vec![],
                 prompt_pool: vec![],
                 image_data_url: None,
+                warmup_requests: 0,
             },
             metrics: vec![],
             ttft_p50_ms: ttft_p50,
