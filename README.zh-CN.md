@@ -50,6 +50,7 @@
 - 批次间延迟、请求间延迟（限流）
 - 可配置最大重试次数，指数退避
 - 压测中随时可以取消，进行中的请求会干净地终止
+- 预热请求不计入报告，避免连接建立/冷启动这类一次性开销影响百分位数据
 
 **报告与历史**
 - 每次压测自动保存为 JSON 文件
@@ -126,6 +127,7 @@ inferscope compare baseline.json report.json --max-regression 10%
 | `request_timeout_ms` | number | `60000` | 单请求超时时间（毫秒） |
 | `messages` | Message[]? | `[]` | 多轮对话消息列表 |
 | `image_data_url` | string? | — | 附加到单轮 prompt 的图片，data URI 格式（`data:image/png;base64,...`） |
+| `warmup_requests` | number | `0` | 正式统计前先跑（并丢弃结果）的请求数 |
 
 ## 稳定性
 

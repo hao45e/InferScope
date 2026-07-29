@@ -48,6 +48,11 @@ pub struct BenchConfig {
     /// 生效——多轮对话的每条消息暂不支持单独附图。
     #[serde(default)]
     pub image_data_url: Option<String>,
+    /// 预热请求数，默认 0（不预热）。正式统计前先跑这么多个请求（复用
+    /// 同一套重试/防缓存标记逻辑），结果直接丢弃、不计入报告——用来把
+    /// 连接建立、目标服务首次编译/缓存加载这类一次性开销排除在统计外。
+    #[serde(default)]
+    pub warmup_requests: u32,
 }
 
 fn default_timeout() -> u64 {
@@ -555,6 +560,46 @@ async fn run_request<S: BenchEventSink>(
 /// （`run_headless`）共用这份逻辑，区别只在传入的事件槽不同 ——
 /// 避免两条路径各写一份、行为逐渐分叉。
 /// 返回 `Ok(None)` 表示被取消，`Ok(Some(report))` 表示正常跑完。
+/// 跑 config.warmup_requests 个预热请求，结果直接丢弃，不计入统计、不推
+/// 事件。复用 run_request（同一套重试 + 防缓存标记逻辑），只是不收集
+/// RequestMetrics、不推 ProgressEvent——调用方看不出这一段跟真实压测的
+/// 请求有什么区别，除了它不会出现在最终报告里。
+async fn run_warmup<S: BenchEventSink>(sink: &S, config: &BenchConfig) {
+    if config.warmup_requests == 0 {
+        return;
+    }
+
+    log_msg(
+        LogLevel::Info,
+        "BENCH",
+        format!("Running {} warmup request(s) (excluded from the report)", config.warmup_requests),
+    );
+
+    let concurrency = config.concurrency.max(1).min(config.warmup_requests);
+    for (batch_start, end) in compute_batches(config.warmup_requests, concurrency) {
+        if check_cancel() {
+            break;
+        }
+
+        let mut handles = Vec::new();
+        for request_id in batch_start..=end {
+            if check_cancel() {
+                break;
+            }
+            let sink_clone = sink.clone();
+            let config_clone = config.clone();
+            handles.push(tokio::spawn(async move {
+                let _ = run_request(&sink_clone, &config_clone, request_id).await;
+            }));
+        }
+        for h in handles.drain(..) {
+            let _ = h.await;
+        }
+    }
+
+    log_msg(LogLevel::Info, "BENCH", "Warmup complete".to_string());
+}
+
 async fn run_bench_core<S: BenchEventSink>(
     sink: S,
     config: BenchConfig,
@@ -570,6 +615,17 @@ async fn run_bench_core<S: BenchEventSink>(
             config.concurrency, config.num_requests
         ),
     );
+
+    run_warmup(&sink, &config).await;
+    if check_cancel() {
+        sink.emit_canceled(&CancelEvent {
+            completed: 0,
+            total: config.num_requests,
+            message: "Benchmark canceled".to_string(),
+        });
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+        return Ok(None);
+    }
 
     let concurrency = config.concurrency.max(1).min(config.num_requests);
     let completed = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -1182,6 +1238,7 @@ mod tests {
             messages: vec![],
             prompt_pool: vec![],
             image_data_url: None,
+            warmup_requests: 0,
         }
     }
 
@@ -1720,6 +1777,44 @@ mod tests {
         (port, handle)
     }
 
+    /// Unlike spawn_mock_sse_server (one connection then done), this accepts
+    /// connections in a loop and counts them — used to verify warmup
+    /// requests actually reach the wire (server sees warmup + real request
+    /// count) even though only the real ones end up in the report.
+    async fn spawn_mock_sse_server_counting_connections() -> (u16, std::sync::Arc<std::sync::atomic::AtomicU32>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let counter_clone = counter.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(_) => break,
+                };
+                counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 2048];
+                    let _ = socket.read(&mut buf).await;
+                    let payload = r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}"#;
+                    let body = format!("data: {payload}\n\ndata: [DONE]\n\n");
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(header.as_bytes()).await;
+                    let _ = socket.write_all(body.as_bytes()).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+
+        (port, counter)
+    }
+
     /// Like spawn_mock_sse_server, but hands the raw captured request text
     /// back over a oneshot channel so a test can inspect exactly what body
     /// run_request_inner actually put on the wire.
@@ -1996,6 +2091,84 @@ mod tests {
         assert!(report.metrics[0].success);
         assert_eq!(report.metrics[0].token_count, 2);
         assert_eq!(report.success_rate_pct, 100.0);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_warmup_requests_reach_the_server_but_are_excluded_from_the_report() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.num_requests = 3;
+        config.warmup_requests = 2;
+
+        let report = run_headless(config)
+            .await
+            .expect("headless run with warmup requests should succeed");
+
+        assert_eq!(
+            report.metrics.len(),
+            3,
+            "only the 3 counted requests should appear in the report, not the 2 warmup ones"
+        );
+        assert_eq!(
+            connection_count.load(std::sync::atomic::Ordering::SeqCst),
+            5,
+            "the server should have actually seen 2 warmup + 3 counted = 5 connections"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_zero_warmup_requests_is_a_no_op() {
+        let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.num_requests = 2;
+        config.warmup_requests = 0;
+
+        let report = run_headless(config).await.expect("should succeed");
+
+        assert_eq!(report.metrics.len(), 2);
+        assert_eq!(connection_count.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_cancel_during_warmup_aborts_before_any_counted_request() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        // Slow single-connection server: the one warmup request will still
+        // be mid-flight when we flip the cancel flag.
+        let sse_payloads: Vec<String> = (0..50)
+            .map(|i| format!(r#"{{"choices":[{{"delta":{{"content":"tok{i} "}},"finish_reason":null}}]}}"#))
+            .collect();
+        let (port, _server) = spawn_mock_sse_server(sse_payloads, 200).await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.concurrency = 1;
+        config.num_requests = 1;
+        config.warmup_requests = 1;
+
+        let task = tokio::spawn(async move { run_headless(config).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        CANCEL_FLAG.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("run_headless did not react to cancellation in time")
+            .unwrap();
+
+        assert_eq!(result.unwrap_err(), "Benchmark was canceled");
+
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// A failed request still produces a `RequestMetrics` entry (with
