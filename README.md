@@ -97,7 +97,15 @@ inferscope bench --config bench.json --output report.json
 inferscope bench --preset my-preset
 ```
 
-`bench.json` is a `BenchConfig` JSON object — see [Configuration reference](#configuration-reference) below for the field list. Exit code reflects whether the run itself completed (`0`) or failed outright — an unreadable/invalid config (`2`) or zero responses at all (`1`). A 0% success rate still exits `0` with the rate visible in the JSON; comparing metrics against a threshold is left to the calling script. Runs the exact same benchmarking engine as the GUI, so results can't drift between the two.
+`bench.json` is a `BenchConfig` JSON object — see [Configuration reference](#configuration-reference) below for the field list. Exit code reflects whether the run itself completed (`0`) or failed outright — an unreadable/invalid config (`2`) or zero responses at all (`1`). A 0% success rate still exits `0` with the rate visible in the JSON. Runs the exact same benchmarking engine as the GUI, so results can't drift between the two.
+
+To gate CI on a performance threshold, compare a run against a baseline report:
+
+```bash
+inferscope compare baseline.json report.json --max-regression 10%
+```
+
+Checks every TTFT/TPOT/E2E percentile plus average throughput and success rate; exits `1` if any metric regressed past the given percentage (latency: got slower; throughput/success rate: got lower), `0` otherwise. Prints a human-readable table by default, or `--json` for machine-readable output.
 
 ## Configuration reference
 

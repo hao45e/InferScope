@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod bench;
 pub mod cli;
+pub mod compare;
 pub mod settings;
 pub mod synthetic_prompt;
 
