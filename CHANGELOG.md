@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-29
+
 ### Added
 
 - `inferscope compare <baseline.json> <new.json> [--max-regression <percent>] [--json]`:
