@@ -114,6 +114,9 @@ class InMemoryBridge {
         console.log("[Mock] Exporting report:", args.format, "→", args.path);
         alert(`Mock mode: report exported to ${String(args.path)}`);
         return undefined;
+      case "export_text":
+        console.log("[Mock] Exporting text:", (args as any).content?.length, "chars →", args.path);
+        return undefined;
       case "read_file_text": {
         const path = (args as any).path as string;
         const file = this._importedFiles.get(path);

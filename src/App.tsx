@@ -195,6 +195,16 @@ function buildMultiCompareRows(reports: BenchReport[]): MultiCompareRow[] {
   ];
 }
 
+// 给一个字段做 CSV 转义——含逗号/引号/换行就用双引号包起来，内部的引号
+// 转成两个引号。对比表的列标签来自模型名/base URL，可能带逗号，不能
+// 直接拼进去。
+function csvEscape(field: string): string {
+  if (/[",\n]/.test(field)) {
+    return `"${field.replace(/"/g, '""')}"`;
+  }
+  return field;
+}
+
 // 并发扫描输入框里逗号分隔的字符串是否至少解析出一个合法并发数
 // （正整数）——用来判断 Start Benchmark 按钮该不该置灰。
 function parseSweepLevels(input: string): number[] {
@@ -901,6 +911,39 @@ function App() {
         await invoke("export_report", { reportJson: JSON.stringify(report), format, path });
         await alert(t.results.exportedAlert(format.toUpperCase()));
       }
+    } catch (e) {
+      // User cancelled dialog — ignore
+    }
+  };
+
+  // 多模型对比 / 并发扫描的导出——这两种结果不是单个 BenchReport，是"多份
+  // 报告并排对比"的表格，跟单次结果的导出逻辑对不上。JSON 直接把整个
+  // entries 数组落盘；CSV 复用 buildMultiCompareRows 算出的同一份聚合数据
+  // （跟屏幕上看到的对比表一模一样），保证导出内容和显示内容不会对不上。
+  const handleExportComparison = async (entries: { label: string; report: BenchReport }[], format: "json" | "csv") => {
+    try {
+      const path = await save({
+        filters: [{ name: format.toUpperCase(), extensions: [format] }],
+        defaultPath: `inferscope-comparison.${format}`,
+      });
+      if (!path) return;
+
+      let content: string;
+      if (format === "json") {
+        content = JSON.stringify(entries, null, 2);
+      } else {
+        const rows = buildMultiCompareRows(entries.map((e) => e.report));
+        const header = ["Metric", ...entries.map((e) => e.label)].map(csvEscape).join(",");
+        const lines = rows.map((row) => {
+          const label = `${t.history[row.labelKey]} (${row.unit})`;
+          const values = row.values.map((v) => v.toFixed(row.digits));
+          return [label, ...values].map(csvEscape).join(",");
+        });
+        content = [header, ...lines].join("\n");
+      }
+
+      await invoke("export_text", { content, path });
+      await alert(t.results.exportedAlert(format.toUpperCase()));
     } catch (e) {
       // User cancelled dialog — ignore
     }
@@ -1704,6 +1747,11 @@ function App() {
         <h3>{t.config.modelComparisonTitle}</h3>
         {renderMultiMetricTable(batchResults, t)}
       </section>
+
+      <section className="export-row">
+        <button className="btn btn-primary btn-sm" onClick={() => handleExportComparison(batchResults, "json")}>{t.results.exportJson}</button>
+        <button className="btn btn-primary btn-sm" onClick={() => handleExportComparison(batchResults, "csv")}>{t.results.exportCsv}</button>
+      </section>
     </div>
   );
 
@@ -1713,6 +1761,7 @@ function App() {
       throughput: s.report.avg_throughput_tok_s,
       ttft: s.report.ttft_p50_ms,
     }));
+    const sweepEntries = sweepResults.map((s) => ({ label: `c=${s.concurrency}`, report: s.report }));
     return (
       <div className="view">
         <div className="view-header">
@@ -1771,7 +1820,12 @@ function App() {
 
         <section className="table-card">
           <h3>{t.config.sweepResultsTitle}</h3>
-          {renderMultiMetricTable(sweepResults.map((s) => ({ label: `c=${s.concurrency}`, report: s.report })), t)}
+          {renderMultiMetricTable(sweepEntries, t)}
+        </section>
+
+        <section className="export-row">
+          <button className="btn btn-primary btn-sm" onClick={() => handleExportComparison(sweepEntries, "json")}>{t.results.exportJson}</button>
+          <button className="btn btn-primary btn-sm" onClick={() => handleExportComparison(sweepEntries, "csv")}>{t.results.exportCsv}</button>
         </section>
       </div>
     );

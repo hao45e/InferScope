@@ -173,6 +173,7 @@ pub fn run() {
             bench::start_bench,
             bench::cancel_bench,
             bench::export_report,
+            bench::export_text,
             bench::save_last_config,
             bench::load_last_config,
             bench::save_preset,
