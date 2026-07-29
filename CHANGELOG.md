@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Roadmap
+
+Planned, not yet scheduled to a hard date — version numbers below are
+provisional and may shift as work lands.
+
+| Version | Planned | Why here |
+|---|---|---|
+| v1.2.0 | `inferscope compare` subcommand for CI threshold gating ([#28](https://github.com/hao45e/InferScope/issues/28)) | Closes the gap left by #5 — comparing metrics against a baseline is currently left entirely to the calling script |
+| v1.2.0 | Export (JSON/CSV) for multi-model compare and concurrency sweep results ([#29](https://github.com/hao45e/InferScope/issues/29)) | Only single-run results can be exported today; noted as a gap during an earlier code review and never picked up |
+
 ## [Unreleased]
 
 ## [1.1.0] - 2026-07-29
