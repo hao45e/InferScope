@@ -7,8 +7,9 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) == Some("bench") {
-        std::process::exit(inferscope_lib::cli::run(&args[2..]));
+    match args.get(1).map(String::as_str) {
+        Some("bench") => std::process::exit(inferscope_lib::cli::run(&args[2..])),
+        Some("compare") => std::process::exit(inferscope_lib::compare::run(&args[2..])),
+        _ => inferscope_lib::run(),
     }
-    inferscope_lib::run()
 }

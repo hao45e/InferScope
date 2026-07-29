@@ -17,9 +17,11 @@ src/                          # React frontend (Vite)
 
 src-tauri/                    # Rust backend (Tauri)
 ├── src/lib.rs                # Tauri builder + command registration entry
-├── src/main.rs               # Windows subprocess suppression; dispatches to cli::run() when
-│                              #   argv[1] == "bench", otherwise calls run() to launch the GUI
+├── src/main.rs               # Windows subprocess suppression; dispatches argv[1] "bench"/"compare"
+│                              #   to cli::run()/compare::run(), otherwise calls run() for the GUI
 ├── src/cli.rs                # Headless `inferscope bench` subcommand (CI perf-regression checks)
+├── src/compare.rs            # `inferscope compare` subcommand — diffs two BenchReport JSON files
+│                              #   against a --max-regression threshold, for CI gating
 ├── src/synthetic_prompt.rs   # tiktoken-backed synthetic prompt generator (exact token count)
 ├── src/settings.rs           # App settings persistence + GitHub Releases update check
 ├── src/bench/mod.rs          # Core engine: concurrency, SSE parsing, metrics, reports

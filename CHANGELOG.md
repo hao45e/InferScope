@@ -5,19 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## Roadmap
-
-Planned, not yet scheduled to a hard date — version numbers below are
-provisional and may shift as work lands.
-
-| Version | Planned | Why here |
-|---|---|---|
-| v1.2.0 | `inferscope compare` subcommand for CI threshold gating ([#28](https://github.com/hao45e/InferScope/issues/28)) | Closes the gap left by #5 — comparing metrics against a baseline is currently left entirely to the calling script |
-
 ## [Unreleased]
 
 ### Added
 
+- `inferscope compare <baseline.json> <new.json> [--max-regression <percent>] [--json]`:
+  diffs every TTFT/TPOT/E2E percentile plus average throughput and
+  success rate between two saved reports, exits non-zero if any metric
+  regressed past the given threshold (default 10%). Closes the gap
+  left by #5, where comparing metrics against a baseline was left
+  entirely to the calling script.
+  ([#28](https://github.com/hao45e/InferScope/issues/28))
 - Export (JSON/CSV) for multi-model compare and concurrency sweep
   results, matching what single-run results already support. CSV
   export mirrors the exact comparison table shown on screen (one row
