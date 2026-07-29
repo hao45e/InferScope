@@ -22,6 +22,8 @@ would be closer to a second product than an extension of this one.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-29
+
 ### Added
 
 - Warmup requests: a new `warmup_requests` field (default 0) runs that
