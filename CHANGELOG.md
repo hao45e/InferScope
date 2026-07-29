@@ -13,9 +13,16 @@ provisional and may shift as work lands.
 | Version | Planned | Why here |
 |---|---|---|
 | v1.2.0 | `inferscope compare` subcommand for CI threshold gating ([#28](https://github.com/hao45e/InferScope/issues/28)) | Closes the gap left by #5 — comparing metrics against a baseline is currently left entirely to the calling script |
-| v1.2.0 | Export (JSON/CSV) for multi-model compare and concurrency sweep results ([#29](https://github.com/hao45e/InferScope/issues/29)) | Only single-run results can be exported today; noted as a gap during an earlier code review and never picked up |
 
 ## [Unreleased]
+
+### Added
+
+- Export (JSON/CSV) for multi-model compare and concurrency sweep
+  results, matching what single-run results already support. CSV
+  export mirrors the exact comparison table shown on screen (one row
+  per metric, one column per compared target/concurrency level) rather
+  than a new format. ([#29](https://github.com/hao45e/InferScope/issues/29))
 
 ## [1.1.0] - 2026-07-29
 

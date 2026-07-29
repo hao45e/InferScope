@@ -1146,6 +1146,16 @@ pub fn export_report(report_json: &str, format: String, path: String) -> Result<
     Ok(())
 }
 
+/// 写一段已经格式化好的文本到指定路径——用于多模型对比 / 并发扫描结果
+/// 的导出：这两种结果不是单个 BenchReport，是"多份报告并排对比"的表格
+/// 形状，跟 export_report() 的单报告 JSON/CSV 逻辑对不上；前端已经有
+/// 渲染这张对比表用的同一份聚合逻辑（buildMultiCompareRows），直接复用
+/// 它拼好 JSON/CSV 字符串，这里只管落盘，不重复实现一遍聚合规则。
+#[tauri::command]
+pub fn export_text(content: String, path: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write file: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1414,6 +1424,27 @@ mod tests {
     fn test_read_image_as_data_url_missing_file() {
         let err = read_image_as_data_url("/nonexistent/path/photo.png".to_string()).unwrap_err();
         assert!(err.contains("Failed to read image file"));
+    }
+
+    #[test]
+    fn test_export_text_writes_content_verbatim() {
+        let dir = std::env::temp_dir().join(format!("inferscope_test_export_text_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("comparison.csv");
+
+        export_text("Metric,A,B\nThroughput,10,20".to_string(), path.to_string_lossy().to_string())
+            .expect("should write successfully");
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written, "Metric,A,B\nThroughput,10,20");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_export_text_reports_error_for_unwritable_path() {
+        let err = export_text("content".to_string(), "/nonexistent/deeply/nested/path.csv".to_string()).unwrap_err();
+        assert!(err.contains("Failed to write file"));
     }
 
     #[test]
