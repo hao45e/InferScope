@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Roadmap
+
+Planned, not yet scheduled to a hard date — version numbers below are
+provisional and may shift as work lands.
+
+| Version | Planned | Why here |
+|---|---|---|
+| v1.3.0 | Warmup requests excluded from statistics ([#33](https://github.com/hao45e/InferScope/issues/33)) | Avoids one-time connection-establishment/cold-start costs skewing the reported percentiles |
+| v1.3.0 | Rate-based (open-loop) load generation mode, alongside the existing concurrency-based mode ([#34](https://github.com/hao45e/InferScope/issues/34)) | Closed-loop concurrency doesn't model real production traffic arrival patterns; matches what genai-perf/aiperf support |
+| v1.4.0 | Embeddings/reranking endpoint benchmarking ([#35](https://github.com/hao45e/InferScope/issues/35)) | Closes a coverage gap vs. genai-perf; designed to be purely additive to the schema so it doesn't need a MAJOR bump |
+
+Text-to-image/image-to-image generation benchmarking was discussed and
+deliberately left off this roadmap — it's a different domain from LLM
+inference (no standard API shape, no TTFT/TPOT-equivalent metrics,
+needs an image-gallery results view instead of a token stream) and
+would be closer to a second product than an extension of this one.
+
 ## [Unreleased]
 
 ## [1.2.0] - 2026-07-29
