@@ -31,9 +31,9 @@ import "./App.css";
 const DEFAULT_PROMPT =
   "Explain the concept of emergent properties in large language models, discussing how increased model scale and training data lead to capabilities not present in smaller models. Include examples of at least three different types of emergent abilities such as chain-of-thought reasoning, instruction following, and in-context learning. Discuss the implications of these emergent properties for AI safety and alignment research.";
 
-// ─── GitHub links (placeholder until the real repo exists) ─────
+// ─── GitHub links ────────────────────────────────────────────
 // Must match GITHUB_OWNER/GITHUB_REPO in src-tauri/src/settings.rs.
-const GITHUB_URL = "https://github.com/your-org/inferscope";
+const GITHUB_URL = "https://github.com/hao45e/InferScope";
 
 // ─── Chart palette ──────────────────────────────────────────────
 // Validated against both the dark surface (#181825) and the light surface
@@ -379,6 +379,11 @@ function App() {
   const [updateLatestVersion, setUpdateLatestVersion] = useState("");
   const [updateReleaseUrl, setUpdateReleaseUrl] = useState("");
   const [updateError, setUpdateError] = useState("");
+  // 直接下载安装包并打开——只有服务端给这个平台挑出了对应的包才有值
+  const [updateDownloadUrl, setUpdateDownloadUrl] = useState("");
+  const [updateDownloadFilename, setUpdateDownloadFilename] = useState("");
+  const [updateInstallStatus, setUpdateInstallStatus] = useState<"idle" | "downloading" | "done" | "error">("idle");
+  const [updateInstallError, setUpdateInstallError] = useState("");
 
   const t = translations[language];
   const systemPrefersDark = useSystemPrefersDark();
@@ -1140,6 +1145,8 @@ function App() {
   const handleCheckForUpdates = async () => {
     setUpdateStatus("checking");
     setUpdateError("");
+    setUpdateInstallStatus("idle");
+    setUpdateInstallError("");
     try {
       const info = await invoke<{
         current_version: string;
@@ -1147,10 +1154,14 @@ function App() {
         update_available: boolean;
         release_url: string;
         release_notes: string;
+        download_url: string | null;
+        download_filename: string | null;
       }>("check_for_updates");
       if (info.update_available) {
         setUpdateLatestVersion(info.latest_version);
         setUpdateReleaseUrl(info.release_url);
+        setUpdateDownloadUrl(info.download_url ?? "");
+        setUpdateDownloadFilename(info.download_filename ?? "");
         setUpdateStatus("available");
       } else {
         setUpdateStatus("upToDate");
@@ -1158,6 +1169,19 @@ function App() {
     } catch (e) {
       setUpdateError(String(e));
       setUpdateStatus("error");
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!updateDownloadUrl || !updateDownloadFilename) return;
+    setUpdateInstallStatus("downloading");
+    setUpdateInstallError("");
+    try {
+      await invoke("download_and_open_update", { url: updateDownloadUrl, filename: updateDownloadFilename });
+      setUpdateInstallStatus("done");
+    } catch (e) {
+      setUpdateInstallError(String(e));
+      setUpdateInstallStatus("error");
     }
   };
 
@@ -2016,6 +2040,22 @@ function App() {
                 {updateStatus === "error" && <span className="hint hint-error">{t.about.updateCheckFailed(updateError)}</span>}
               </div>
             </div>
+            {updateStatus === "available" && updateDownloadUrl && (
+              <div className="settings-row">
+                <span className="settings-row-label" />
+                <div className="settings-row-actions">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleInstallUpdate}
+                    disabled={updateInstallStatus === "downloading"}
+                  >
+                    {updateInstallStatus === "downloading" ? t.about.installingUpdate : t.about.installUpdate}
+                  </button>
+                  {updateInstallStatus === "done" && <span className="hint hint-success">{t.about.installUpdateDone}</span>}
+                  {updateInstallStatus === "error" && <span className="hint hint-error">{t.about.installUpdateFailed(updateInstallError)}</span>}
+                </div>
+              </div>
+            )}
             <div className="settings-row">
               <span className="settings-row-label" />
               <div className="settings-row-actions">

@@ -179,6 +179,10 @@ export interface Translations {
     upToDate: string;
     updateAvailable: (v: string) => string;
     updateCheckFailed: (msg: string) => string;
+    installUpdate: string;
+    installingUpdate: string;
+    installUpdateDone: string;
+    installUpdateFailed: (msg: string) => string;
     changelog: string;
     github: string;
     logLevelLabel: string;
@@ -366,6 +370,10 @@ const en: Translations = {
     upToDate: "You're on the latest version",
     updateAvailable: (v) => `A new version (${v}) is available`,
     updateCheckFailed: (msg) => `Update check failed: ${msg}`,
+    installUpdate: "Update Now",
+    installingUpdate: "Downloading…",
+    installUpdateDone: "Downloaded — follow the installer to finish updating",
+    installUpdateFailed: (msg) => `Failed to download update: ${msg}`,
     changelog: "Changelog",
     github: "GitHub",
     logLevelLabel: "System Log Level",
@@ -553,6 +561,10 @@ const zhCN: Translations = {
     upToDate: "已是最新版本",
     updateAvailable: (v) => `发现新版本 ${v}`,
     updateCheckFailed: (msg) => `检查更新失败: ${msg}`,
+    installUpdate: "立即更新",
+    installingUpdate: "下载中…",
+    installUpdateDone: "已下载，按安装向导提示完成更新",
+    installUpdateFailed: (msg) => `更新下载失败：${msg}`,
     changelog: "更新日志",
     github: "GitHub",
     logLevelLabel: "系统日志级别",
@@ -740,6 +752,10 @@ const zhTW: Translations = {
     upToDate: "已是最新版本",
     updateAvailable: (v) => `發現新版本 ${v}`,
     updateCheckFailed: (msg) => `檢查更新失敗: ${msg}`,
+    installUpdate: "立即更新",
+    installingUpdate: "下載中…",
+    installUpdateDone: "已下載，請依安裝精靈提示完成更新",
+    installUpdateFailed: (msg) => `更新下載失敗：${msg}`,
     changelog: "更新日誌",
     github: "GitHub",
     logLevelLabel: "系統日誌級別",
