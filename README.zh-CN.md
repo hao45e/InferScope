@@ -29,6 +29,7 @@
 
 **核心压测**
 - 可配置并发数，按批次调度执行
+- 限速（开环）压测模式：按固定的每秒请求数依次发出请求，不等上一批完成，更接近线上真实流量的到达模式
 - Token-by-token 实时流式输出，打字机效果展示生成过程
 - TTFT/TPOT 实时折线图，随请求完成动态更新
 - 完整性能报告：TTFT / TPOT / 端到端延迟的 P50/P90/P95/P99 百分位、平均吞吐量、成功率
@@ -128,6 +129,7 @@ inferscope compare baseline.json report.json --max-regression 10%
 | `messages` | Message[]? | `[]` | 多轮对话消息列表 |
 | `image_data_url` | string? | — | 附加到单轮 prompt 的图片，data URI 格式（`data:image/png;base64,...`） |
 | `warmup_requests` | number | `0` | 正式统计前先跑（并丢弃结果）的请求数 |
+| `request_rate_per_sec` | number? | — | 设置（且 > 0）后改用开环限速调度，按此每秒请求数发压，替代按并发数分批 |
 
 ## 稳定性
 

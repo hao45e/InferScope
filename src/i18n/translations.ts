@@ -54,6 +54,8 @@ export interface Translations {
     maxTokens: string;
     temperature: string;
     warmupRequests: string;
+    rateModeToggle: string;
+    requestRatePerSec: string;
     sectionPrompt: string;
     singleTurn: string;
     multiTurn: string;
@@ -246,6 +248,8 @@ const en: Translations = {
     maxTokens: "Max Tokens",
     temperature: "Temperature",
     warmupRequests: "Warmup Requests",
+    rateModeToggle: "Use fixed request rate (open-loop)",
+    requestRatePerSec: "Request Rate (req/s)",
     sectionPrompt: "Prompt",
     singleTurn: "Single-turn",
     multiTurn: "Multi-turn",
@@ -438,6 +442,8 @@ const zhCN: Translations = {
     maxTokens: "Max Tokens",
     temperature: "Temperature",
     warmupRequests: "预热请求数",
+    rateModeToggle: "使用固定请求速率（开环）",
+    requestRatePerSec: "请求速率（请求/秒）",
     sectionPrompt: "Prompt",
     singleTurn: "单轮对话",
     multiTurn: "多轮对话",
@@ -630,6 +636,8 @@ const zhTW: Translations = {
     maxTokens: "Max Tokens",
     temperature: "Temperature",
     warmupRequests: "預熱請求數",
+    rateModeToggle: "使用固定請求速率（開環）",
+    requestRatePerSec: "請求速率（請求/秒）",
     sectionPrompt: "Prompt",
     singleTurn: "單輪對話",
     multiTurn: "多輪對話",

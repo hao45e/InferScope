@@ -12,7 +12,6 @@ provisional and may shift as work lands.
 
 | Version | Planned | Why here |
 |---|---|---|
-| v1.3.0 | Rate-based (open-loop) load generation mode, alongside the existing concurrency-based mode ([#34](https://github.com/hao45e/InferScope/issues/34)) | Closed-loop concurrency doesn't model real production traffic arrival patterns; matches what genai-perf/aiperf support |
 | v1.4.0 | Embeddings/reranking endpoint benchmarking ([#35](https://github.com/hao45e/InferScope/issues/35)) | Closes a coverage gap vs. genai-perf; designed to be purely additive to the schema so it doesn't need a MAJOR bump |
 
 Text-to-image/image-to-image generation benchmarking was discussed and
@@ -33,6 +32,17 @@ would be closer to a second product than an extension of this one.
   cache-defeat marker and go through the same retry logic as counted
   requests — the only difference is they aren't in the report.
   ([#33](https://github.com/hao45e/InferScope/issues/33))
+- Rate-based (open-loop) load generation mode: a new "Use fixed request
+  rate" toggle on the Config tab replaces the concurrency input with a
+  requests-per-second value. All `num_requests` requests are scheduled at
+  that fixed rate without waiting for prior requests to finish, instead
+  of the existing concurrency-based batches — this models real production
+  traffic arrival patterns (open-loop) rather than a closed loop that
+  self-throttles to the target's response speed. Mutually exclusive with
+  concurrency sweep mode; compatible with multi-model compare. New
+  `request_rate_per_sec` config field (optional, defaults to unset —
+  existing configs are unaffected and keep running concurrency-based).
+  ([#34](https://github.com/hao45e/InferScope/issues/34))
 
 ## [1.2.0] - 2026-07-29
 

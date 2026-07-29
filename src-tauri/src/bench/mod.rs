@@ -53,6 +53,12 @@ pub struct BenchConfig {
     /// 连接建立、目标服务首次编译/缓存加载这类一次性开销排除在统计外。
     #[serde(default)]
     pub warmup_requests: u32,
+    /// 按固定速率（每秒请求数）发压——设置了就整体改用开环调度：请求按
+    /// 这个速率依次发出，不等上一个/上一批完成，不再走 concurrency 分批
+    /// 逻辑（更接近线上真实流量的到达模式）。None 或 <= 0 时按原来的
+    /// concurrency 并发批次模式跑，不影响任何已有配置的行为。
+    #[serde(default)]
+    pub request_rate_per_sec: Option<f64>,
 }
 
 fn default_timeout() -> u64 {
@@ -600,6 +606,177 @@ async fn run_warmup<S: BenchEventSink>(sink: &S, config: &BenchConfig) {
     log_msg(LogLevel::Info, "BENCH", "Warmup complete".to_string());
 }
 
+/// 生成一个"跑一个请求、推进度事件、写日志、把结果塞进 all_metrics"的
+/// 后台任务——并发批次模式和限速模式都要做同一件事，抽出来避免两份
+/// 几乎一样的代码分别维护、逐渐分叉。
+fn spawn_one_request<S: BenchEventSink>(
+    sink: S,
+    config: BenchConfig,
+    request_id: u32,
+    completed: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    all_metrics: std::sync::Arc<std::sync::Mutex<Vec<RequestMetrics>>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let metrics = run_request(&sink, &config, request_id).await;
+        let done = completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+
+        // 推送进度事件
+        let progress = ProgressEvent {
+            completed: done,
+            total: config.num_requests,
+            current_ttft_us: metrics.as_ref().ok().map(|m| m.ttft_us),
+            current_tpots: metrics.as_ref().ok().map(|m| m.tpots.clone()).unwrap_or_default(),
+        };
+        sink.emit_progress(&progress);
+
+        match metrics {
+            Ok(m) => {
+                log_msg(
+                    LogLevel::Info,
+                    "BENCH",
+                    format!(
+                        "[worker{}] #{request_id} done: TTFT={:.2}ms tokens={} e2e={:.2}ms",
+                        concurrency_slot(request_id, &config),
+                        m.ttft_us as f64 / 1000.0,
+                        m.token_count,
+                        m.e2e_latency_us as f64 / 1000.0
+                    ),
+                );
+                all_metrics.lock().unwrap().push(m.clone());
+            }
+            Err(e) => {
+                log_msg(
+                    LogLevel::Error,
+                    "BENCH",
+                    format!("[worker{}] #{request_id} failed: {e}", concurrency_slot(request_id, &config)),
+                );
+                let m = RequestMetrics {
+                    request_id,
+                    ttft_us: 0,
+                    tpots: vec![],
+                    e2e_latency_us: 0,
+                    token_count: 0,
+                    success: false,
+                    error: Some(e),
+                };
+                all_metrics.lock().unwrap().push(m);
+            }
+        }
+    })
+}
+
+/// 等一批已经 spawn 出去的任务全部结束——每个任务内部已经会在取消标志
+/// 位设置后尽快自行终止，所以这里始终等待它们结束，而不是提前 return，
+/// 避免已经 spawn 出去的任务在函数返回后仍然在后台继续跑、继续占用目标
+/// 服务资源。任务本身 panic（跟请求失败是两回事）就补一条失败记录，
+/// 不让这个请求悄悄漏出报告之外。
+async fn await_request_handles<S: BenchEventSink>(
+    sink: &S,
+    config: &BenchConfig,
+    completed: &std::sync::Arc<std::sync::atomic::AtomicU32>,
+    all_metrics: &std::sync::Arc<std::sync::Mutex<Vec<RequestMetrics>>>,
+    handles: Vec<(u32, tokio::task::JoinHandle<()>)>,
+) {
+    for (req_id, h) in handles {
+        if let Err(e) = h.await {
+            log_msg(LogLevel::Error, "BENCH", format!("Request #{req_id} task failed: {e}"));
+            let m = RequestMetrics {
+                request_id: req_id,
+                ttft_us: 0,
+                tpots: vec![],
+                e2e_latency_us: 0,
+                token_count: 0,
+                success: false,
+                error: Some(format!("Task execution failed: {e}")),
+            };
+            all_metrics.lock().unwrap().push(m);
+
+            let done = completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            sink.emit_progress(&ProgressEvent {
+                completed: done,
+                total: config.num_requests,
+                current_ttft_us: None,
+                current_tpots: vec![],
+            });
+        }
+    }
+}
+
+/// 闭环并发模式（原有行为，完全不变）：按 concurrency 分批，一批发完、
+/// 等这批全部结束（受 batch_interval_ms 影响）再发下一批。
+async fn run_concurrency_based<S: BenchEventSink>(
+    sink: &S,
+    config: &BenchConfig,
+    concurrency: u32,
+    completed: &std::sync::Arc<std::sync::atomic::AtomicU32>,
+    all_metrics: &std::sync::Arc<std::sync::Mutex<Vec<RequestMetrics>>>,
+) {
+    for (batch_start, end) in compute_batches(config.num_requests, concurrency) {
+        if check_cancel() {
+            break;
+        }
+
+        let mut handles: Vec<(u32, tokio::task::JoinHandle<()>)> = vec![];
+
+        for request_id in batch_start..=end {
+            if check_cancel() {
+                break;
+            }
+
+            let h = spawn_one_request(sink.clone(), config.clone(), request_id, completed.clone(), all_metrics.clone());
+            handles.push((request_id, h));
+
+            // Per-request interval (delay after spawning each request)
+            if config.per_request_interval_ms > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(config.per_request_interval_ms))
+                    .await;
+            }
+        }
+
+        await_request_handles(sink, config, completed, all_metrics, handles).await;
+
+        if check_cancel() {
+            break;
+        }
+
+        // Batch interval (delay between batches)
+        if config.batch_interval_ms > 0 && batch_start + concurrency <= config.num_requests {
+            tokio::time::sleep(std::time::Duration::from_millis(config.batch_interval_ms)).await;
+        }
+    }
+}
+
+/// 开环限速模式：按固定速率（每秒 rate_per_sec 个）依次发出全部请求，
+/// 不等上一个/上一批完成——跟并发批次模式相反，同一时刻在飞的请求数量
+/// 完全取决于目标服务的响应速度，不受 concurrency 限制（更接近线上真实
+/// 流量的到达模式）。所有请求发完之后才统一等它们结束，这样慢请求不会
+/// 卡住后续请求按时发出。
+async fn run_rate_based<S: BenchEventSink>(
+    sink: &S,
+    config: &BenchConfig,
+    rate_per_sec: f64,
+    completed: &std::sync::Arc<std::sync::atomic::AtomicU32>,
+    all_metrics: &std::sync::Arc<std::sync::Mutex<Vec<RequestMetrics>>>,
+) {
+    let interval = std::time::Duration::from_secs_f64(1.0 / rate_per_sec);
+    let mut handles: Vec<(u32, tokio::task::JoinHandle<()>)> = Vec::with_capacity(config.num_requests as usize);
+
+    for request_id in 1..=config.num_requests {
+        if check_cancel() {
+            break;
+        }
+
+        let h = spawn_one_request(sink.clone(), config.clone(), request_id, completed.clone(), all_metrics.clone());
+        handles.push((request_id, h));
+
+        if request_id < config.num_requests {
+            tokio::time::sleep(interval).await;
+        }
+    }
+
+    await_request_handles(sink, config, completed, all_metrics, handles).await;
+}
+
 async fn run_bench_core<S: BenchEventSink>(
     sink: S,
     config: BenchConfig,
@@ -611,8 +788,8 @@ async fn run_bench_core<S: BenchEventSink>(
         LogLevel::Info,
         "BENCH",
         format!(
-            "Benchmark started: concurrency={} num_requests={}",
-            config.concurrency, config.num_requests
+            "Benchmark started: concurrency={} num_requests={} rate_per_sec={:?}",
+            config.concurrency, config.num_requests, config.request_rate_per_sec
         ),
     );
 
@@ -631,125 +808,12 @@ async fn run_bench_core<S: BenchEventSink>(
     let completed = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let all_metrics = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
 
-    for (batch_start, end) in compute_batches(config.num_requests, concurrency) {
-        if check_cancel() {
-            break;
-        }
-
-        let mut handles: Vec<(u32, tokio::task::JoinHandle<()>)> = vec![];
-
-        for request_id in batch_start..=end {
-            if check_cancel() {
-                break;
-            }
-
-            let sink_clone = sink.clone();
-            let config_clone = config.clone();
-            let completed_clone = completed.clone();
-            let metrics_clone = all_metrics.clone();
-
-            let h = tokio::spawn(async move {
-                let metrics = run_request(&sink_clone, &config_clone, request_id).await;
-                let done = completed_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-
-                // 推送进度事件
-                let progress = ProgressEvent {
-                    completed: done,
-                    total: config_clone.num_requests,
-                    current_ttft_us: metrics.as_ref().ok().map(|m| m.ttft_us),
-                    current_tpots: metrics
-                        .as_ref()
-                        .ok()
-                        .map(|m| m.tpots.clone())
-                        .unwrap_or_default(),
-                };
-                sink_clone.emit_progress(&progress);
-
-                match metrics {
-                    Ok(m) => {
-                        log_msg(
-                            LogLevel::Info,
-                            "BENCH",
-                            format!(
-                                "[worker{}] #{request_id} done: TTFT={:.2}ms tokens={} e2e={:.2}ms",
-                                concurrency_slot(request_id, &config_clone),
-                                m.ttft_us as f64 / 1000.0,
-                                m.token_count,
-                                m.e2e_latency_us as f64 / 1000.0
-                            ),
-                        );
-                        metrics_clone.lock().unwrap().push(m.clone());
-                    }
-                    Err(e) => {
-                        log_msg(
-                            LogLevel::Error,
-                            "BENCH",
-                            format!("[worker{}] #{request_id} failed: {e}", concurrency_slot(request_id, &config_clone)),
-                        );
-                        let m = RequestMetrics {
-                            request_id,
-                            ttft_us: 0,
-                            tpots: vec![],
-                            e2e_latency_us: 0,
-                            token_count: 0,
-                            success: false,
-                            error: Some(e),
-                        };
-                        metrics_clone.lock().unwrap().push(m);
-                    }
-                }
-            });
-
-            handles.push((request_id, h));
-
-            // Per-request interval (delay after spawning each request)
-            if config.per_request_interval_ms > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(config.per_request_interval_ms))
-                    .await;
-            }
-        }
-
-        // 等待本批次所有任务结束。每个任务内部已经会在取消标志位设置后
-        // 尽快自行终止（发起请求前 / 读取每个 SSE chunk 时都会检查），
-        // 所以这里始终等待它们结束，而不是提前 return —— 避免已经 spawn
-        // 出去的任务在函数返回后仍然在后台继续跑、继续占用目标服务资源。
-        for (req_id, h) in handles.drain(..) {
-            match h.await {
-                Ok(_) => {}
-                Err(e) => {
-                    log_msg(LogLevel::Error, "BENCH", format!("Request #{req_id} task failed: {e}"));
-                    let m = RequestMetrics {
-                        request_id: req_id,
-                        ttft_us: 0,
-                        tpots: vec![],
-                        e2e_latency_us: 0,
-                        token_count: 0,
-                        success: false,
-                        error: Some(format!("Task execution failed: {e}")),
-                    };
-                    let mut m_ref = all_metrics.lock().unwrap();
-                    m_ref.push(m);
-                    drop(m_ref);
-
-                    let done = completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    sink.emit_progress(&ProgressEvent {
-                        completed: done,
-                        total: config.num_requests,
-                        current_ttft_us: None,
-                        current_tpots: vec![],
-                    });
-                }
-            }
-        }
-
-        if check_cancel() {
-            break;
-        }
-
-        // Batch interval (delay between batches)
-        if config.batch_interval_ms > 0 && batch_start + concurrency <= config.num_requests {
-            tokio::time::sleep(std::time::Duration::from_millis(config.batch_interval_ms)).await;
-        }
+    // request_rate_per_sec <= 0（包括 None）一律当作"没设置"，退回并发批次
+    // 模式——这也是一道防御性护栏：Duration::from_secs_f64 遇到 0/负数/
+    // 无穷大会直接 panic，绝不能把非法值传下去。
+    match config.request_rate_per_sec.filter(|r| r.is_finite() && *r > 0.0) {
+        Some(rate) => run_rate_based(&sink, &config, rate, &completed, &all_metrics).await,
+        None => run_concurrency_based(&sink, &config, concurrency, &completed, &all_metrics).await,
     }
 
     if check_cancel() {
@@ -1239,6 +1303,7 @@ mod tests {
             prompt_pool: vec![],
             image_data_url: None,
             warmup_requests: 0,
+            request_rate_per_sec: None,
         }
     }
 
@@ -2169,6 +2234,96 @@ mod tests {
         assert_eq!(result.unwrap_err(), "Benchmark was canceled");
 
         CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[tokio::test]
+    async fn test_rate_based_mode_spaces_requests_by_the_configured_interval() {
+        let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.num_requests = 3;
+        config.request_rate_per_sec = Some(10.0); // one every 100ms
+
+        let start = std::time::Instant::now();
+        let report = run_headless(config).await.expect("rate-based run should succeed");
+        let elapsed = start.elapsed();
+
+        assert_eq!(report.metrics.len(), 3);
+        assert_eq!(connection_count.load(std::sync::atomic::Ordering::SeqCst), 3);
+        // 3 requests at 10/sec means 2 gaps of ~100ms between spawns — allow
+        // generous slack for CI scheduling jitter, this just checks the open
+        // loop schedule is actually respected rather than firing all at once.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(180),
+            "expected requests to be spaced out by the configured rate, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_based_mode_includes_every_request_in_the_report() {
+        let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.num_requests = 5;
+        config.request_rate_per_sec = Some(200.0); // fast — this test cares about count, not timing
+
+        let report = run_headless(config).await.expect("rate-based run should succeed");
+
+        assert_eq!(report.metrics.len(), 5);
+        assert_eq!(connection_count.load(std::sync::atomic::Ordering::SeqCst), 5);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_cancel_during_rate_based_run_stops_further_requests() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.num_requests = 100;
+        config.request_rate_per_sec = Some(10.0); // one every 100ms — plenty of time to cancel mid-run
+
+        let task = tokio::spawn(async move { run_headless(config).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        CANCEL_FLAG.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("run_headless did not react to cancellation in time")
+            .unwrap();
+
+        assert_eq!(result.unwrap_err(), "Benchmark was canceled");
+        let seen = connection_count.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            seen < 100,
+            "cancellation should have stopped the schedule well before all 100 requests fired, saw {seen}"
+        );
+
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[tokio::test]
+    async fn test_zero_or_negative_rate_falls_back_to_concurrency_mode_without_panicking() {
+        for rate in [Some(0.0), Some(-5.0), Some(f64::NAN), None] {
+            let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
+
+            let mut config = make_config();
+            config.base_url = format!("http://127.0.0.1:{port}");
+            config.concurrency = 2;
+            config.num_requests = 4;
+            config.request_rate_per_sec = rate;
+
+            let report = run_headless(config).await.expect("should fall back to concurrency mode");
+
+            assert_eq!(report.metrics.len(), 4, "rate={rate:?}");
+            assert_eq!(connection_count.load(std::sync::atomic::Ordering::SeqCst), 4, "rate={rate:?}");
+        }
     }
 
     /// A failed request still produces a `RequestMetrics` entry (with

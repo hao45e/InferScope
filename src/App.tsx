@@ -364,6 +364,12 @@ function App() {
   const [concurrencySweepMode, setConcurrencySweepMode] = useState(false);
   const [sweepConcurrencyInput, setSweepConcurrencyInput] = useState("1,2,4,8");
 
+  // 限速（开环）模式——不再按 concurrency 分批，改成按固定的每秒请求数
+  // 依次发出，更接近线上真实流量的到达模式。跟并发扫描是同一个轴上互斥
+  // 的另一种"并发数"输入方式，所以跟扫描模式互斥；跟对比模式不冲突。
+  const [rateMode, setRateMode] = useState(false);
+  const [requestRateInput, setRequestRateInput] = useState("10");
+
   // config presets
   const [presets, setPresets] = useState<string[]>([]);
   const [selectedPresetName, setSelectedPresetName] = useState("");
@@ -461,6 +467,13 @@ function App() {
     const pool = loaded.prompt_pool || [];
     setImportedPrompts(pool);
     setUsePromptCycling(pool.length > 0);
+    // buildEffectiveConfig 不会直接透传 config.request_rate_per_sec——它是
+    // 从 rateMode/requestRateInput 这两个 UI 状态现算的，所以加载一份带限速
+    // 设置的配置/预设时，必须把这两个 UI 状态也一起回填，不然设置会静默丢失。
+    const rate = loaded.request_rate_per_sec;
+    const hasRate = typeof rate === "number" && Number.isFinite(rate) && rate > 0;
+    setRateMode(hasRate);
+    if (hasRate) setRequestRateInput(String(rate));
   }, []);
 
   // 启动时自动读回上一次实际用过的配置（跟下面命名预设列表是两回事）
@@ -634,8 +647,9 @@ function App() {
     [],
   );
 
-  // 把多轮对话消息 / 循环 prompt 池同步进最终发给后端的配置
+  // 把多轮对话消息 / 循环 prompt 池 / 限速模式的速率同步进最终发给后端的配置
   const buildEffectiveConfig = useCallback((): BenchConfig => {
+    const parsedRate = Number(requestRateInput);
     return {
       ...config,
       messages: multiTurnMode ? messagePairs : [],
@@ -643,8 +657,9 @@ function App() {
         !multiTurnMode && usePromptCycling && importedPrompts.length > 0
           ? importedPrompts
           : [],
+      request_rate_per_sec: rateMode && Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : null,
     };
-  }, [config, multiTurnMode, messagePairs, usePromptCycling, importedPrompts]);
+  }, [config, multiTurnMode, messagePairs, usePromptCycling, importedPrompts, rateMode, requestRateInput]);
 
   const updateConfig = <K extends keyof BenchConfig>(key: K) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -1376,7 +1391,8 @@ function App() {
                 onClick={handleStartClick}
                 disabled={
                   (multiModelMode && compareTargets.every((tg) => !tg.model.trim() || !tg.base_url.trim())) ||
-                  (concurrencySweepMode && parseSweepLevels(sweepConcurrencyInput).length === 0)
+                  (concurrencySweepMode && parseSweepLevels(sweepConcurrencyInput).length === 0) ||
+                  (rateMode && !(Number.isFinite(Number(requestRateInput)) && Number(requestRateInput) > 0))
                 }
               >
                 {status === "done" ? t.config.restartBench : t.config.startBench}
@@ -1512,19 +1528,44 @@ function App() {
               <input
                 type="checkbox"
                 checked={concurrencySweepMode}
-                onChange={(e) => setConcurrencySweepMode(e.target.checked)}
+                onChange={(e) => {
+                  setConcurrencySweepMode(e.target.checked);
+                  if (e.target.checked) setRateMode(false);
+                }}
               />
               {t.config.sweepConcurrencyToggle}
             </label>
           )}
+          {!multiModelMode && (
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={rateMode}
+                onChange={(e) => {
+                  setRateMode(e.target.checked);
+                  if (e.target.checked) setConcurrencySweepMode(false);
+                }}
+              />
+              {t.config.rateModeToggle}
+            </label>
+          )}
           <div className="field-grid">
             <label className="field">
-              <span className="field-label">{t.config.concurrency}</span>
+              <span className="field-label">{rateMode ? t.config.requestRatePerSec : t.config.concurrency}</span>
               {concurrencySweepMode ? (
                 <input
                   value={sweepConcurrencyInput}
                   onChange={(e) => setSweepConcurrencyInput(e.target.value)}
                   placeholder="1,2,4,8,16"
+                />
+              ) : rateMode ? (
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  value={requestRateInput}
+                  onChange={(e) => setRequestRateInput(e.target.value)}
+                  placeholder="10"
                 />
               ) : (
                 <input type="number" min="1" max="50" value={config.concurrency} onChange={updateConfig("concurrency")} />

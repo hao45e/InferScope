@@ -29,6 +29,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 
 **Benchmarking**
 - Configurable concurrency, batched request scheduling
+- Rate-based (open-loop) load mode: fire requests at a fixed requests/sec rate instead of waiting on prior batches, for modeling real production traffic arrival patterns
 - Live token-by-token streaming view of the response as it's generated
 - Real-time TTFT/TPOT charts that update as requests complete
 - Full report: TTFT / TPOT / end-to-end latency at P50/P90/P95/P99, average throughput, success rate
@@ -128,6 +129,7 @@ Checks every TTFT/TPOT/E2E percentile plus average throughput and success rate; 
 | `messages` | Message[]? | `[]` | Multi-turn conversation messages |
 | `image_data_url` | string? | — | Image as a data URI (`data:image/png;base64,...`) attached to a single-turn prompt |
 | `warmup_requests` | number | `0` | Requests to run (and discard) before the counted batch starts |
+| `request_rate_per_sec` | number? | — | If set (and > 0), switch to open-loop rate-based scheduling at this requests/sec rate instead of concurrency-based batches |
 
 ## Stability
 
