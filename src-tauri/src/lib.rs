@@ -189,6 +189,7 @@ pub fn run() {
             settings::save_app_settings,
             settings::load_app_settings,
             settings::check_for_updates,
+            settings::download_and_open_update,
             settings::get_app_version,
             get_logs,
             get_logs_with_filter,

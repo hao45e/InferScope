@@ -82,9 +82,20 @@ class InMemoryBridge {
       case "get_app_version":
         return MOCK_APP_VERSION;
       case "check_for_updates":
-        // 模拟模式下没有真实仓库可查，直接模拟一个"检查失败"结果，
-        // 跟真实后端在占位仓库还没建好时的行为一致。
-        throw new Error("Mock mode: GitHub repository is not configured yet");
+        // 模拟模式下不会真的去请求 GitHub，直接假装有新版本可用，方便
+        // 在没有真实 Tauri 环境的情况下也能测"检查更新 → 直接更新"这条链路。
+        return {
+          current_version: MOCK_APP_VERSION,
+          latest_version: "99.0.0",
+          update_available: true,
+          release_url: "https://github.com/hao45e/InferScope/releases/tag/v99.0.0",
+          release_notes: "Mock release notes",
+          download_url: "https://example.com/mock-installer.dmg",
+          download_filename: "mock-installer.dmg",
+        };
+      case "download_and_open_update":
+        console.log("[Mock] Would download and open update:", args);
+        return undefined;
       case "list_reports":
         return this._reports.map((r) => ({
           path: r.path,

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Settings → About: when an update is available, a new "Update Now" button
+  downloads the installer matching the current platform (macOS: dmg by
+  CPU architecture; Windows: the NSIS `-setup.exe`; Linux: AppImage) and
+  opens it with the system's default handler, instead of only linking out
+  to the GitHub release page (which is still there as a fallback/for other
+  platforms). ([#26](https://github.com/hao45e/InferScope/issues/26))
+
+### Fixed
+
+- The frontend's GitHub link constant was still the placeholder
+  (`your-org/inferscope`) left over from before the repo existed — the
+  "Changelog" and "GitHub" buttons in Settings → About pointed nowhere.
+  The backend's copy (used for the actual update check) was fixed in #10;
+  this one was missed. ([#26](https://github.com/hao45e/InferScope/issues/26))
+
 ## [1.0.0] - 2026-07-28
 
 ### Added
