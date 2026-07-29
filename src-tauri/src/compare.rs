@@ -336,6 +336,7 @@ mod tests {
                 prompt_pool: vec![],
                 image_data_url: None,
                 warmup_requests: 0,
+                request_rate_per_sec: None,
             },
             metrics: vec![],
             ttft_p50_ms: ttft_p50,

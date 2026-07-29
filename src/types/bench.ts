@@ -17,6 +17,7 @@ export interface BenchConfig {
   prompt_pool?: string[];
   image_data_url?: string | null;
   warmup_requests?: number;
+  request_rate_per_sec?: number | null;
 }
 
 // 对话消息
