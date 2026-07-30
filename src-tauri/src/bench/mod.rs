@@ -2230,8 +2230,12 @@ mod tests {
         (port, rx)
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_cache_defeat_marker_reaches_real_request_body() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let sse_payloads = vec![
             r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}"#.to_string(),
             "[DONE]".to_string(),
@@ -2256,8 +2260,12 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_attached_image_reaches_real_request_body() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let sse_payloads = vec![
             r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}"#.to_string(),
             "[DONE]".to_string(),
@@ -2345,8 +2353,12 @@ mod tests {
         assert!(err.contains("404"));
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_embeddings_request_reports_item_count_and_zero_ttft_tpot() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let body = r#"{"data":[{"embedding":[0.1,0.2,0.3],"index":0}],"model":"test-model"}"#.to_string();
         let (port, _server) = spawn_mock_json_server("HTTP/1.1 200 OK", body).await;
 
@@ -2365,8 +2377,12 @@ mod tests {
         assert!(report.avg_throughput_items_s > 0.0);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_rerank_request_reports_item_count_matching_results_length() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let body = r#"{"results":[{"index":0,"relevance_score":0.9},{"index":1,"relevance_score":0.4}]}"#.to_string();
         let (port, _server) = spawn_mock_json_server("HTTP/1.1 200 OK", body).await;
 
@@ -2384,8 +2400,12 @@ mod tests {
         assert_eq!(report.metrics[0].ttft_us, 0);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_embeddings_request_reports_http_error_status() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let (port, _server) = spawn_mock_json_server("HTTP/1.1 500 Internal Server Error", "{}".to_string()).await;
 
         let mut config = make_config();
@@ -2401,8 +2421,12 @@ mod tests {
         assert!(report.metrics[0].error.as_deref().unwrap_or("").contains("500"));
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_run_request_inner_reports_connection_refused_detail() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         // Bind then immediately drop to get a port nothing is listening on.
         let port = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2555,8 +2579,12 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_zero_warmup_requests_is_a_no_op() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
 
         let mut config = make_config();
@@ -2604,8 +2632,12 @@ mod tests {
         CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_rate_based_mode_spaces_requests_by_the_configured_interval() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
 
         let mut config = make_config();
@@ -2628,8 +2660,12 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_rate_based_mode_includes_every_request_in_the_report() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
 
         let mut config = make_config();
@@ -2676,8 +2712,12 @@ mod tests {
         CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_zero_or_negative_rate_falls_back_to_concurrency_mode_without_panicking() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         for rate in [Some(0.0), Some(-5.0), Some(f64::NAN), None] {
             let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
 
@@ -2698,8 +2738,12 @@ mod tests {
     /// `success: false`), so the report comes back with a 0% success rate
     /// rather than an `Err` — `run_headless` only errors when the metrics
     /// list ends up genuinely empty (i.e. `num_requests == 0`).
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_run_headless_reports_zero_success_rate_when_nothing_is_listening() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let port = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             listener.local_addr().unwrap().port()
