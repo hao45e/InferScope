@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-30
+
 ### Added
 
 - Embeddings/reranking endpoint benchmarking: a new "Endpoint Type"
