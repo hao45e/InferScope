@@ -522,9 +522,9 @@ function App() {
     const hasRate = typeof rate === "number" && Number.isFinite(rate) && rate > 0;
     setRateMode(hasRate);
     if (hasRate) setRequestRateInput(String(rate));
-    // embedding_inputs/rerank_documents live in config as arrays, but the
-    // Config tab edits them as free-typed textareas — rebuild that raw text
-    // from the array so a loaded preset/last-config round-trips visibly.
+    // embedding_inputs/rerank_documents 在 config 里是数组，但 Config 页面
+    // 是用自由输入的文本框编辑它们——把数组重新拼回原始文本，这样加载
+    // 一份预设/上次配置时这两个文本框才能看到回填的内容。
     setEmbeddingInputsText((loaded.embedding_inputs ?? []).join("\n"));
     setRerankDocumentsText((loaded.rerank_documents ?? []).join("\n"));
   }, []);
@@ -1108,19 +1108,9 @@ function App() {
       if (!result) return;
       const content = await invoke<string>("read_file_text", { path: String(result) });
       if (content.trim()) {
-        // Detect format based on extension
-        const ext = String(result).split(".").pop()?.toLowerCase();
-        let prompts: string[];
-        if (ext === "jsonl") {
-          prompts = content
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean);
-        } else {
-          // .txt or other: split by newline, skip empty lines
-          prompts = content.split("\n").map((line) => line.trim()).filter((l) => l.length > 0);
-        }
-        setImportedPrompts(prompts);
+        // .jsonl 和 .txt 目前都是按"每行一条、去空白、丢空行"处理，跟
+        // embeddings/rerank 文本框用的是同一份规则，统一用 parseLines。
+        setImportedPrompts(parseLines(content));
         setUsePromptCycling(true);
       }
     } catch (e) {
@@ -1837,12 +1827,24 @@ function App() {
           </div>
         </div>
 
+        {/* recentTtft/recentTpot 和 avgThroughput 这三张卡片必须用同一份
+            "现在到底是不是 chat 模式"的判断依据，不能各看各的：avgThroughput
+            天然只在跑完一次单次压测后才出现，这时哪怕用户已经把 Endpoint Type
+            切到了别的模式（还没开始新的一轮），三张卡片也应该继续按"刚跑完的
+            这份报告"来判断，而不是让 recentTtft/recentTpot 看当前选择的模式、
+            avgThroughput 看报告自己的模式，两边各自为政导致同一行卡片互相矛盾。
+            没有已完成的单次结果时，才退回看当前表单选择的模式。 */}
+        {(() => {
+          const dashboardIsChat = result?.kind === "single"
+            ? (result.report.config.endpoint_type ?? "chat") === "chat"
+            : (config.endpoint_type ?? "chat") === "chat";
+          return (
         <div className="metric-cards">
           <div className={"stat-tile status-" + status}>
             <span className="stat-label">{t.config.statusLabel}</span>
             <span className="stat-value stat-value-text">{status === "idle" ? t.config.statusIdle : status === "running" ? t.config.statusRunning : t.config.statusDone}</span>
           </div>
-          {(config.endpoint_type ?? "chat") === "chat" && (
+          {dashboardIsChat && (
             <>
               <div className="stat-tile">
                 <span className="stat-label">{t.config.recentTtft}</span>
@@ -1857,7 +1859,7 @@ function App() {
             </>
           )}
           {result?.kind === "single" && (() => {
-            const isChat = (result.report.config.endpoint_type ?? "chat") === "chat";
+            const isChat = dashboardIsChat;
             return (
               <div className="stat-tile accent">
                 <span className="stat-label">{t.config.avgThroughput}</span>
@@ -1867,6 +1869,8 @@ function App() {
             );
           })()}
         </div>
+          );
+        })()}
 
         <div className="chart-card">
           <div className="chart-card-header">

@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`avg_throughput_items_s`, `item_count`) all default to chat-mode
   behavior — existing configs, presets, and CI scripts are unaffected.
   `inferscope compare` also gates on `avg_throughput_items_s` now.
+  Embeddings/rerank runs are validated up front (missing documents/
+  query/input text errors out immediately) and a response whose shape
+  doesn't match the endpoint type (e.g. a missing `data`/`results`
+  array) is treated as a failed request rather than a silent
+  zero-throughput "success".
   ([#35](https://github.com/hao45e/InferScope/issues/35))
 
 ## [1.3.0] - 2026-07-29

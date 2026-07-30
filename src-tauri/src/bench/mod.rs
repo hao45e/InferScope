@@ -459,6 +459,30 @@ async fn run_request_inner<S: BenchEventSink>(
 /// JSON、从某个数组字段里数出条目数"骨架——两者的区别只在 URL/请求体
 /// 长什么样、以及条目数组在响应里叫什么字段名，抽出来避免以后改一处
 /// （比如加个共同的错误处理）忘了改另一处。
+/// 一次性物化整个响应体到内存前的硬上限——防止指向一个配置错误/异常的
+/// 服务时，一个巨大（或者故意构造得很大）的响应把并发跑着的请求一起
+/// 拖到 OOM。跟 chat 路径的流式 SSE 处理不是一回事，但至少给
+/// embeddings/rerank 这条"一次性读完整个 body 再解析"的路径兜个底。
+const MAX_RESPONSE_BODY_BYTES: usize = 50 * 1024 * 1024;
+
+/// 按块读响应体，边读边检查总字节数，超过上限就报错——而不是无脑
+/// `response.bytes()`/`response.text()` 一次性把整个 body 吃进内存。
+async fn read_bounded_body(response: reqwest::Response) -> Result<Vec<u8>, String> {
+    use futures::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| format!("Failed to read response body: {e}"))?;
+        if buf.len() + chunk.len() > MAX_RESPONSE_BODY_BYTES {
+            return Err(format!(
+                "Response body exceeded {MAX_RESPONSE_BODY_BYTES} bytes — refusing to buffer further"
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 async fn run_single_json_request(
     client: &reqwest::Client,
     config: &BenchConfig,
@@ -471,18 +495,27 @@ async fn run_single_json_request(
     let builder = client.post(url).json(&body).header("Content-Type", "application/json");
     let builder = apply_auth_headers(builder, config);
     let response = builder.send().await.map_err(|e| format!("HTTP request failed: {}", describe_error(&e)))?;
+    let status = response.status();
+    let body_bytes = read_bounded_body(response).await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body_text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body_bytes);
         return Err(http_error_hint(status, &body_text));
     }
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response JSON: {e}"))?;
-    let item_count = json[item_count_field].as_array().map(|a| a.len() as u32).unwrap_or(0);
+    let json: serde_json::Value =
+        serde_json::from_slice(&body_bytes).map_err(|e| format!("Failed to parse response JSON: {e}"))?;
+    // 响应形状跟这个端点类型对不上（比如目标其实是 HuggingFace TEI，
+    // 用的是裸数组响应而不是 {"results": [...]}）不能悄悄按 0 条处理——
+    // 那样报告会显示"100% 成功、吞吐 0"，看着正常实则啥也没测到。
+    let item_count = match json[item_count_field].as_array() {
+        Some(arr) => arr.len() as u32,
+        None => {
+            return Err(format!(
+                "Response JSON is missing an array field \"{item_count_field}\" — the target server's response shape doesn't match what this endpoint type expects"
+            ));
+        }
+    };
     let e2e_us = start.elapsed().as_micros() as u64;
 
     Ok(RequestMetrics {
@@ -943,10 +976,31 @@ async fn run_rate_based<S: BenchEventSink>(
     await_request_handles(sink, config, completed, all_metrics, handles).await;
 }
 
+/// 校验当前 endpoint_type 下必需的字段是否齐全。CI 场景下这些字段常常
+/// 来自手写/脚本生成的配置文件，留空很容易被忽略——不校验的话，跑出来
+/// 的是"100% 成功、吞吐 0"这种看着正常、实则啥也没测到的假阳性报告，
+/// 必须在真正发请求之前就挡掉，而不是让它悄悄跑完一整轮。
+fn validate_endpoint_config(config: &BenchConfig) -> Result<(), String> {
+    match config.endpoint_type {
+        EndpointType::Embeddings if config.embedding_inputs.is_empty() && config.prompt.trim().is_empty() => Err(
+            "Embeddings mode requires at least one input text: set embedding_inputs, or fall back to a non-empty prompt".to_string(),
+        ),
+        EndpointType::Rerank if config.rerank_documents.is_empty() => {
+            Err("Rerank mode requires at least one candidate document: rerank_documents is empty".to_string())
+        }
+        EndpointType::Rerank if config.rerank_query.trim().is_empty() => {
+            Err("Rerank mode requires a non-empty query: rerank_query is empty".to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
 async fn run_bench_core<S: BenchEventSink>(
     sink: S,
     config: BenchConfig,
 ) -> Result<Option<BenchReport>, String> {
+    validate_endpoint_config(&config)?;
+
     // Reset cancel flag at start
     CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
 
@@ -2076,6 +2130,21 @@ mod tests {
     }
 
     #[test]
+    fn test_build_embedding_input_cycles_through_a_three_item_list() {
+        // Mirrors test_build_messages_cycles_prompt_pool's 3-item coverage —
+        // a 2-item list can't catch an off-by-one that only manifests once
+        // the list is longer than 2 (build_messages/build_embedding_input
+        // share the exact same (request_id-1)%len formula).
+        let mut config = make_config();
+        config.embedding_inputs = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        assert!(build_embedding_input(&config, 1).ends_with("a"));
+        assert!(build_embedding_input(&config, 2).ends_with("b"));
+        assert!(build_embedding_input(&config, 3).ends_with("c"));
+        assert!(build_embedding_input(&config, 4).ends_with("a")); // wraps around
+    }
+
+    #[test]
     fn test_build_embedding_input_falls_back_to_prompt_when_list_is_empty() {
         let mut config = make_config();
         config.embedding_inputs = vec![];
@@ -2419,6 +2488,93 @@ mod tests {
         assert_eq!(report.success_rate_pct, 0.0);
         assert!(!report.metrics[0].success);
         assert!(report.metrics[0].error.as_deref().unwrap_or("").contains("500"));
+    }
+
+    /// A CI-committed config.json that sets endpoint_type=rerank but forgets
+    /// rerank_documents must fail loudly, not silently run a whole benchmark
+    /// against zero documents and report "100% success, 0 throughput" as if
+    /// that were a normal result.
+    #[test]
+    fn test_validate_endpoint_config_rejects_rerank_with_no_documents() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Rerank;
+        config.rerank_query = "some query".to_string();
+        config.rerank_documents = vec![];
+
+        let err = validate_endpoint_config(&config).unwrap_err();
+        assert!(err.contains("rerank_documents"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_config_rejects_rerank_with_empty_query() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Rerank;
+        config.rerank_query = "   ".to_string();
+        config.rerank_documents = vec!["doc".to_string()];
+
+        let err = validate_endpoint_config(&config).unwrap_err();
+        assert!(err.contains("rerank_query"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_config_rejects_embeddings_with_no_input_at_all() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Embeddings;
+        config.embedding_inputs = vec![];
+        config.prompt = "  ".to_string(); // no usable fallback either
+
+        let err = validate_endpoint_config(&config).unwrap_err();
+        assert!(err.contains("embedding_inputs"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_config_allows_embeddings_falling_back_to_prompt() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Embeddings;
+        config.embedding_inputs = vec![];
+        config.prompt = "use this as the input".to_string();
+
+        assert!(validate_endpoint_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_endpoint_config_allows_chat_regardless_of_the_new_fields() {
+        // Chat mode never looks at rerank_query/rerank_documents/embedding_inputs,
+        // so leaving them at their defaults must never be rejected.
+        let config = make_config();
+        assert!(validate_endpoint_config(&config).is_ok());
+    }
+
+    /// If the target server's response doesn't have the expected array field
+    /// (e.g. it's a differently-shaped rerank implementation like TEI, or
+    /// just a malformed/empty response), this must surface as a failed
+    /// request — not a silent "100% success, item_count: 0" report that
+    /// looks like a real (if unlucky) benchmark result.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_rerank_request_fails_loudly_when_response_is_missing_the_results_array() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        // Well-formed JSON, 200 OK, but no "results" array — e.g. a bare
+        // array response (TEI-style) or an error object with a 200 status.
+        let body = r#"{"message":"ok"}"#.to_string();
+        let (port, _server) = spawn_mock_json_server("HTTP/1.1 200 OK", body).await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.endpoint_type = EndpointType::Rerank;
+        config.rerank_query = "query".to_string();
+        config.rerank_documents = vec!["doc".to_string()];
+
+        let report = run_headless(config).await.expect("run_headless should still produce a report");
+        assert_eq!(report.success_rate_pct, 0.0, "a shape-mismatched response must not count as success");
+        assert!(!report.metrics[0].success);
+        assert!(
+            report.metrics[0].error.as_deref().unwrap_or("").contains("results"),
+            "error should name the missing field, got: {:?}",
+            report.metrics[0].error
+        );
     }
 
     #[allow(clippy::await_holding_lock)]
