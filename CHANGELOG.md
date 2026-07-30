@@ -5,22 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## Roadmap
-
-Planned, not yet scheduled to a hard date — version numbers below are
-provisional and may shift as work lands.
-
-| Version | Planned | Why here |
-|---|---|---|
-| v1.4.0 | Embeddings/reranking endpoint benchmarking ([#35](https://github.com/hao45e/InferScope/issues/35)) | Closes a coverage gap vs. genai-perf; designed to be purely additive to the schema so it doesn't need a MAJOR bump |
-
-Text-to-image/image-to-image generation benchmarking was discussed and
-deliberately left off this roadmap — it's a different domain from LLM
-inference (no standard API shape, no TTFT/TPOT-equivalent metrics,
-needs an image-gallery results view instead of a token stream) and
-would be closer to a second product than an extension of this one.
-
 ## [Unreleased]
+
+### Added
+
+- Embeddings/reranking endpoint benchmarking: a new "Endpoint Type"
+  selector (Chat / Embeddings / Rerank) on the Config tab. Embeddings
+  mode benchmarks `POST /v1/embeddings` (OpenAI-compatible) with a
+  list of input texts cycled per request; Rerank mode benchmarks
+  `POST /v1/rerank` (the de-facto convention shared by Cohere/Jina/
+  vLLM — HuggingFace TEI uses a different request/response shape and
+  isn't compatible) with a shared query and candidate document list. Both are
+  single-request/single-response (no token streaming), so reports for
+  these modes have no TTFT/TPOT — only end-to-end latency percentiles
+  and a new `avg_throughput_items_s` metric (embedding vectors/s or
+  reranked documents/s). New optional `BenchConfig` fields
+  (`endpoint_type`, `embedding_inputs`, `rerank_query`,
+  `rerank_documents`) and `BenchReport`/`RequestMetrics` fields
+  (`avg_throughput_items_s`, `item_count`) all default to chat-mode
+  behavior — existing configs, presets, and CI scripts are unaffected.
+  `inferscope compare` also gates on `avg_throughput_items_s` now.
+  Embeddings/rerank runs are validated up front (missing documents/
+  query/input text errors out immediately) and a response whose shape
+  doesn't match the endpoint type (e.g. a missing `data`/`results`
+  array) is treated as a failed request rather than a silent
+  zero-throughput "success".
+  ([#35](https://github.com/hao45e/InferScope/issues/35))
 
 ## [1.3.0] - 2026-07-29
 

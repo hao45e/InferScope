@@ -34,6 +34,7 @@
 - TTFT/TPOT 实时折线图，随请求完成动态更新
 - 完整性能报告：TTFT / TPOT / 端到端延迟的 P50/P90/P95/P99 百分位、平均吞吐量、成功率
 - 每个请求自动注入**防缓存标记**，避免因重复发送相同 prompt 命中 KV cache 而得到失真的延迟数据
+- 端点类型选择：可压测 Chat（`/v1/chat/completions`）、Embeddings（`/v1/embeddings`）或 Rerank（`/v1/rerank`）端点——embeddings/rerank 是单次请求单次响应，没有逐 token 流式输出，报告里展示的是端到端延迟和 items/s 吞吐，而不是 TTFT/TPOT
 - 一次批量对比多个目标，每个目标可以各自设置 base URL / 模型 / API Key——不止能对比同一个服务下的不同模型，还能跨厂商对比，结果并排展示，每项指标自动高亮最优值
 - 并发扫描：同一个模型依次跑一串逗号分隔的并发数，画出吞吐量-延迟曲线找饱和点
 
@@ -130,6 +131,10 @@ inferscope compare baseline.json report.json --max-regression 10%
 | `image_data_url` | string? | — | 附加到单轮 prompt 的图片，data URI 格式（`data:image/png;base64,...`） |
 | `warmup_requests` | number | `0` | 正式统计前先跑（并丢弃结果）的请求数 |
 | `request_rate_per_sec` | number? | — | 设置（且 > 0）后改用开环限速调度，按此每秒请求数发压，替代按并发数分批 |
+| `endpoint_type` | `"chat"` \| `"embeddings"` \| `"rerank"`? | `"chat"` | 要压测的端点类型 |
+| `embedding_inputs` | string[]? | `[]` | embeddings 模式下的输入文本，按请求循环使用 |
+| `rerank_query` | string? | — | rerank 模式下所有请求共用的查询串 |
+| `rerank_documents` | string[]? | `[]` | rerank 模式下所有请求共用的候选文档列表 |
 
 ## 稳定性
 

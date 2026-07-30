@@ -34,6 +34,7 @@ Benchmarking an LLM inference endpoint usually means either scripting `curl` loo
 - Real-time TTFT/TPOT charts that update as requests complete
 - Full report: TTFT / TPOT / end-to-end latency at P50/P90/P95/P99, average throughput, success rate
 - Automatic **cache-defeat marker** injected into every request so results reflect real inference latency, not KV-cache hits from repeated identical prompts
+- Endpoint type selector: benchmark Chat (`/v1/chat/completions`), Embeddings (`/v1/embeddings`), or Rerank (`/v1/rerank`) endpoints — embeddings/rerank reports show end-to-end latency and items/s throughput instead of TTFT/TPOT, since those are single-request/single-response, not token-streamed
 - Compare multiple models in one batch, each with its own base URL / model / API key — so you can pit different providers against each other, not just different models on the same endpoint — with a side-by-side results table highlighting the best value per metric
 - Concurrency sweep: run one model against a comma-separated list of concurrency levels in one batch, chart throughput vs. latency to find the saturation point
 
@@ -130,6 +131,10 @@ Checks every TTFT/TPOT/E2E percentile plus average throughput and success rate; 
 | `image_data_url` | string? | — | Image as a data URI (`data:image/png;base64,...`) attached to a single-turn prompt |
 | `warmup_requests` | number | `0` | Requests to run (and discard) before the counted batch starts |
 | `request_rate_per_sec` | number? | — | If set (and > 0), switch to open-loop rate-based scheduling at this requests/sec rate instead of concurrency-based batches |
+| `endpoint_type` | `"chat"` \| `"embeddings"` \| `"rerank"`? | `"chat"` | Which endpoint to benchmark |
+| `embedding_inputs` | string[]? | `[]` | Embeddings mode: input texts, cycled one per request |
+| `rerank_query` | string? | — | Rerank mode: query shared by every request |
+| `rerank_documents` | string[]? | `[]` | Rerank mode: candidate documents shared by every request |
 
 ## Stability
 

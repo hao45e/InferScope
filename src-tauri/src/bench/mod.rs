@@ -59,6 +59,34 @@ pub struct BenchConfig {
     /// concurrency 并发批次模式跑，不影响任何已有配置的行为。
     #[serde(default)]
     pub request_rate_per_sec: Option<f64>,
+    /// 压测的目标端点类型。默认 Chat（现有 SSE 对话补全），旧的配置文件/
+    /// 预设/历史报告没有这个字段时按 Chat 处理，行为完全不变。
+    #[serde(default)]
+    pub endpoint_type: EndpointType,
+    /// embeddings 模式下待编码的输入文本列表，按 request_id 循环取一条
+    /// （跟 prompt_pool 的循环规则一样），为空时退回用 prompt 字段当单条
+    /// 输入。
+    #[serde(default)]
+    pub embedding_inputs: Vec<String>,
+    /// rerank 模式下所有请求共用的查询串。
+    #[serde(default)]
+    pub rerank_query: String,
+    /// rerank 模式下所有请求共用的候选文档列表。
+    #[serde(default)]
+    pub rerank_documents: Vec<String>,
+}
+
+/// 压测的目标端点类型——三种模式的请求/响应结构完全不同（chat 是流式
+/// SSE，embeddings/rerank 是单次请求单次 JSON 响应，没有 TTFT/TPOT 概念），
+/// 但共用同一套 concurrency/rate/warmup/重试调度逻辑。默认 Chat，保证
+/// 老配置文件/预设/历史报告在没有这个字段时行为不变。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointType {
+    #[default]
+    Chat,
+    Embeddings,
+    Rerank,
 }
 
 fn default_timeout() -> u64 {
@@ -85,6 +113,10 @@ pub struct RequestMetrics {
     pub e2e_latency_us: u64,
     /// 生成的 token 数
     pub token_count: u32,
+    /// embeddings 模式下返回的向量条数 / rerank 模式下返回的排序结果条数。
+    /// chat 模式恒为 0（不适用）。
+    #[serde(default)]
+    pub item_count: u32,
     /// 是否成功
     pub success: bool,
     /// 错误信息（如果失败）
@@ -125,6 +157,10 @@ pub struct BenchReport {
     pub e2e_p99_ms: f64,
     /// 平均吞吐（tokens/s）
     pub avg_throughput_tok_s: f64,
+    /// 平均吞吐（embeddings 模式下为向量数/s，rerank 模式下为文档数/s）。
+    /// chat 模式恒为 0（不适用，看 avg_throughput_tok_s）。
+    #[serde(default)]
+    pub avg_throughput_items_s: f64,
     /// 成功率
     pub success_rate_pct: f64,
 }
@@ -338,12 +374,69 @@ fn build_chat_completions_url(base_url: &str) -> String {
     build_endpoint_url(base_url, "chat/completions")
 }
 
+/// 拼出 embeddings 端点 URL。
+fn build_embeddings_url(base_url: &str) -> String {
+    build_endpoint_url(base_url, "embeddings")
+}
+
+/// 拼出 rerank 端点 URL——虽然不是 OpenAI 官方标准，但 Cohere/Jina/vLLM
+/// 等主流实现都用同一套 {query, documents} 请求体、{results: [...]} 响应
+/// 和这个子路径，是事实上最通用的约定。注意 HuggingFace TEI 的 /rerank
+/// 用的是不同的请求/响应字段名（`texts` + 裸数组响应），不在此列，指向
+/// TEI 服务时这个请求体不适用。
+fn build_rerank_url(base_url: &str) -> String {
+    build_endpoint_url(base_url, "rerank")
+}
+
 /// 拼出模型列表端点 URL。
 fn build_models_url(base_url: &str) -> String {
     build_endpoint_url(base_url, "models")
 }
 
-/// 向 OpenAI 兼容端点发送单个流式请求并返回指标
+/// 选取本次请求要编码的输入文本：按 request_id 从 embedding_inputs 循环取
+/// 一条（同 prompt_pool 的循环规则），为空时退回用 prompt 字段当单条输入。
+/// 开头拼一段防缓存标记，用途跟 cache_defeat_marker 一致——避免目标服务
+/// 对重复文本做前缀缓存，让延迟数据失真。
+fn build_embedding_input(config: &BenchConfig, request_id: u32) -> String {
+    let text = if !config.embedding_inputs.is_empty() {
+        let idx = (request_id as usize - 1) % config.embedding_inputs.len();
+        config.embedding_inputs[idx].as_str()
+    } else {
+        config.prompt.as_str()
+    };
+    format!("{} {}", cache_defeat_marker(request_id), text)
+}
+
+/// 把可选的 Authorization / 自定义请求头应用到一个请求 builder 上——chat/
+/// embeddings/rerank 三条请求路径共用同一套头部处理逻辑。
+fn apply_auth_headers(mut builder: reqwest::RequestBuilder, config: &BenchConfig) -> reqwest::RequestBuilder {
+    if let Some(ref auth) = config.auth_header {
+        builder = builder.header("Authorization", auth);
+    }
+    if let Some(ref headers) = config.custom_headers {
+        for (k, v) in headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+    }
+    builder
+}
+
+/// 把非 2xx 状态码翻译成人可读的错误提示——三条请求路径共用。
+fn http_error_hint(status: reqwest::StatusCode, body_text: &str) -> String {
+    match status.as_u16() {
+        401 => format!("Authentication failed (401): {body_text}"),
+        403 => format!("Permission denied (403): {body_text}"),
+        429 => format!("Rate limited (429): {body_text}"),
+        500 => format!("Internal server error (500): {body_text}"),
+        502 => format!("Bad gateway (502): {body_text}"),
+        503 => format!("Service unavailable (503): {body_text}"),
+        _ => format!("Server returned an error [{status}]: {body_text}"),
+    }
+}
+
+/// 向目标发送单个请求并返回指标——按 endpoint_type 分派到 chat（流式
+/// SSE）/ embeddings / rerank（都是单次请求单次 JSON 响应）三条路径之一，
+/// HTTP 客户端在这里统一构建一次，避免三条路径各建一个。
 async fn run_request_inner<S: BenchEventSink>(
     sink: &S,
     config: &BenchConfig,
@@ -355,6 +448,129 @@ async fn run_request_inner<S: BenchEventSink>(
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", describe_error(&e)))?;
 
+    match config.endpoint_type {
+        EndpointType::Chat => run_chat_request(&client, sink, config, request_id).await,
+        EndpointType::Embeddings => run_embeddings_request(&client, config, request_id).await,
+        EndpointType::Rerank => run_rerank_request(&client, config, request_id).await,
+    }
+}
+
+/// embeddings/rerank 共用的"发一次非流式请求、检查状态码、解析返回
+/// JSON、从某个数组字段里数出条目数"骨架——两者的区别只在 URL/请求体
+/// 长什么样、以及条目数组在响应里叫什么字段名，抽出来避免以后改一处
+/// （比如加个共同的错误处理）忘了改另一处。
+/// 一次性物化整个响应体到内存前的硬上限——防止指向一个配置错误/异常的
+/// 服务时，一个巨大（或者故意构造得很大）的响应把并发跑着的请求一起
+/// 拖到 OOM。跟 chat 路径的流式 SSE 处理不是一回事，但至少给
+/// embeddings/rerank 这条"一次性读完整个 body 再解析"的路径兜个底。
+const MAX_RESPONSE_BODY_BYTES: usize = 50 * 1024 * 1024;
+
+/// 按块读响应体，边读边检查总字节数，超过上限就报错——而不是无脑
+/// `response.bytes()`/`response.text()` 一次性把整个 body 吃进内存。
+async fn read_bounded_body(response: reqwest::Response) -> Result<Vec<u8>, String> {
+    use futures::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| format!("Failed to read response body: {e}"))?;
+        if buf.len() + chunk.len() > MAX_RESPONSE_BODY_BYTES {
+            return Err(format!(
+                "Response body exceeded {MAX_RESPONSE_BODY_BYTES} bytes — refusing to buffer further"
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
+async fn run_single_json_request(
+    client: &reqwest::Client,
+    config: &BenchConfig,
+    request_id: u32,
+    url: &str,
+    body: serde_json::Value,
+    item_count_field: &str,
+) -> Result<RequestMetrics, String> {
+    let start = std::time::Instant::now();
+    let builder = client.post(url).json(&body).header("Content-Type", "application/json");
+    let builder = apply_auth_headers(builder, config);
+    let response = builder.send().await.map_err(|e| format!("HTTP request failed: {}", describe_error(&e)))?;
+    let status = response.status();
+    let body_bytes = read_bounded_body(response).await?;
+
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body_bytes);
+        return Err(http_error_hint(status, &body_text));
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&body_bytes).map_err(|e| format!("Failed to parse response JSON: {e}"))?;
+    // 响应形状跟这个端点类型对不上（比如目标其实是 HuggingFace TEI，
+    // 用的是裸数组响应而不是 {"results": [...]}）不能悄悄按 0 条处理——
+    // 那样报告会显示"100% 成功、吞吐 0"，看着正常实则啥也没测到。
+    let item_count = match json[item_count_field].as_array() {
+        Some(arr) => arr.len() as u32,
+        None => {
+            return Err(format!(
+                "Response JSON is missing an array field \"{item_count_field}\" — the target server's response shape doesn't match what this endpoint type expects"
+            ));
+        }
+    };
+    let e2e_us = start.elapsed().as_micros() as u64;
+
+    Ok(RequestMetrics {
+        request_id,
+        ttft_us: 0,
+        tpots: vec![],
+        e2e_latency_us: e2e_us,
+        token_count: 0,
+        item_count,
+        success: true,
+        error: None,
+    })
+}
+
+/// 向 embeddings 端点发送单次非流式请求——没有 TTFT/TPOT 概念，只有一个
+/// 端到端延迟；item_count 记录返回的向量条数（响应体 `data` 数组长度）。
+async fn run_embeddings_request(
+    client: &reqwest::Client,
+    config: &BenchConfig,
+    request_id: u32,
+) -> Result<RequestMetrics, String> {
+    let url = build_embeddings_url(&config.base_url);
+    let input = build_embedding_input(config, request_id);
+    let body = serde_json::json!({
+        "model": config.model,
+        "input": input,
+    });
+    run_single_json_request(client, config, request_id, &url, body, "data").await
+}
+
+/// 向 rerank 端点发送单次非流式请求——query/documents 是所有请求共用的
+/// 同一份（query 会拼防缓存标记），item_count 记录返回的排序结果条数
+/// （响应体 `results` 数组长度）。
+async fn run_rerank_request(
+    client: &reqwest::Client,
+    config: &BenchConfig,
+    request_id: u32,
+) -> Result<RequestMetrics, String> {
+    let url = build_rerank_url(&config.base_url);
+    let query = format!("{} {}", cache_defeat_marker(request_id), config.rerank_query);
+    let body = serde_json::json!({
+        "model": config.model,
+        "query": query,
+        "documents": config.rerank_documents,
+    });
+    run_single_json_request(client, config, request_id, &url, body, "results").await
+}
+
+/// 向 chat completions 端点发送单个流式请求并返回指标
+async fn run_chat_request<S: BenchEventSink>(
+    client: &reqwest::Client,
+    sink: &S,
+    config: &BenchConfig,
+    request_id: u32,
+) -> Result<RequestMetrics, String> {
     let url = build_chat_completions_url(&config.base_url);
 
     let messages_val = build_messages(config, request_id);
@@ -368,20 +584,11 @@ async fn run_request_inner<S: BenchEventSink>(
     });
 
     // Build request with optional headers
-    let mut builder = client
+    let builder = client
         .post(&url)
         .json(&body)
         .header("Content-Type", "application/json");
-
-    if let Some(ref auth) = config.auth_header {
-        builder = builder.header("Authorization", auth);
-    }
-
-    if let Some(ref headers) = config.custom_headers {
-        for (k, v) in headers {
-            builder = builder.header(k.as_str(), v.as_str());
-        }
-    }
+    let builder = apply_auth_headers(builder, config);
 
     let response = builder.send().await.map_err(|e| format!("HTTP request failed: {}", describe_error(&e)))?;
 
@@ -398,18 +605,7 @@ async fn run_request_inner<S: BenchEventSink>(
     if !response.status().is_success() {
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
-
-        let hint = match status.as_u16() {
-            401 => format!("Authentication failed (401): {}", body_text),
-            403 => format!("Permission denied (403): {}", body_text),
-            429 => format!("Rate limited (429): {}", body_text),
-            500 => format!("Internal server error (500): {}", body_text),
-            502 => format!("Bad gateway (502): {}", body_text),
-            503 => format!("Service unavailable (503): {}", body_text),
-            _ => format!("Server returned an error [{status}]: {body_text}"),
-        };
-
-        return Err(hint);
+        return Err(http_error_hint(status, &body_text));
     }
 
     use futures::StreamExt;
@@ -518,6 +714,7 @@ async fn run_request_inner<S: BenchEventSink>(
         tpots,
         e2e_latency_us: e2e_us,
         token_count: if first_token_time.is_some() { token_index } else { 0 },
+        item_count: 0,
         success: true,
         error: None,
     })
@@ -656,6 +853,7 @@ fn spawn_one_request<S: BenchEventSink>(
                     tpots: vec![],
                     e2e_latency_us: 0,
                     token_count: 0,
+                    item_count: 0,
                     success: false,
                     error: Some(e),
                 };
@@ -686,6 +884,7 @@ async fn await_request_handles<S: BenchEventSink>(
                 tpots: vec![],
                 e2e_latency_us: 0,
                 token_count: 0,
+                item_count: 0,
                 success: false,
                 error: Some(format!("Task execution failed: {e}")),
             };
@@ -777,10 +976,31 @@ async fn run_rate_based<S: BenchEventSink>(
     await_request_handles(sink, config, completed, all_metrics, handles).await;
 }
 
+/// 校验当前 endpoint_type 下必需的字段是否齐全。CI 场景下这些字段常常
+/// 来自手写/脚本生成的配置文件，留空很容易被忽略——不校验的话，跑出来
+/// 的是"100% 成功、吞吐 0"这种看着正常、实则啥也没测到的假阳性报告，
+/// 必须在真正发请求之前就挡掉，而不是让它悄悄跑完一整轮。
+fn validate_endpoint_config(config: &BenchConfig) -> Result<(), String> {
+    match config.endpoint_type {
+        EndpointType::Embeddings if config.embedding_inputs.is_empty() && config.prompt.trim().is_empty() => Err(
+            "Embeddings mode requires at least one input text: set embedding_inputs, or fall back to a non-empty prompt".to_string(),
+        ),
+        EndpointType::Rerank if config.rerank_documents.is_empty() => {
+            Err("Rerank mode requires at least one candidate document: rerank_documents is empty".to_string())
+        }
+        EndpointType::Rerank if config.rerank_query.trim().is_empty() => {
+            Err("Rerank mode requires a non-empty query: rerank_query is empty".to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
 async fn run_bench_core<S: BenchEventSink>(
     sink: S,
     config: BenchConfig,
 ) -> Result<Option<BenchReport>, String> {
+    validate_endpoint_config(&config)?;
+
     // Reset cancel flag at start
     CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
 
@@ -895,6 +1115,10 @@ fn compute_report(config: &BenchConfig, metrics: &[RequestMetrics]) -> BenchRepo
 
     let avg_throughput = total_tokens / avg_e2e_s;
 
+    // 平均吞吐（items/s——embeddings 模式下是向量数，rerank 模式下是文档数）
+    let total_items: f64 = success_metrics.iter().map(|m| m.item_count as f64).sum();
+    let avg_item_throughput = total_items / avg_e2e_s;
+
     BenchReport {
         config: config.clone(),
         metrics: metrics.to_vec(),
@@ -911,6 +1135,7 @@ fn compute_report(config: &BenchConfig, metrics: &[RequestMetrics]) -> BenchRepo
         e2e_p95_ms: percentile_f64(&e2es_ms, 95.0),
         e2e_p99_ms: percentile_f64(&e2es_ms, 99.0),
         avg_throughput_tok_s: avg_throughput,
+        avg_throughput_items_s: avg_item_throughput,
         success_rate_pct: (success_count as f64 / total) * 100.0,
     }
 }
@@ -1238,7 +1463,7 @@ pub fn export_report(report_json: &str, format: String, path: String) -> Result<
 
     if format == "csv" || path.ends_with(".csv") {
         let mut lines: Vec<String> = vec![
-            "request_id,ttft_ms,tpot_avg_ms,e2e_ms,tokens,success,error".to_string(),
+            "request_id,ttft_ms,tpot_avg_ms,e2e_ms,tokens,items,success,error".to_string(),
         ];
         for m in &bench_report.metrics {
             let avg_tpot = if !m.tpots.is_empty() {
@@ -1247,12 +1472,13 @@ pub fn export_report(report_json: &str, format: String, path: String) -> Result<
                 0.0
             };
             lines.push(format!(
-                "{},{:.2},{:.4},{:.2},{},{},{}",
+                "{},{:.2},{:.4},{:.2},{},{},{},{}",
                 m.request_id,
                 m.ttft_us as f64 / 1000.0,
                 avg_tpot,
                 m.e2e_latency_us as f64 / 1000.0,
                 m.token_count,
+                m.item_count,
                 if m.success { "true" } else { "false" },
                 m.error.as_deref().unwrap_or("")
             ));
@@ -1304,6 +1530,10 @@ mod tests {
             image_data_url: None,
             warmup_requests: 0,
             request_rate_per_sec: None,
+            endpoint_type: EndpointType::Chat,
+            embedding_inputs: vec![],
+            rerank_query: String::new(),
+            rerank_documents: vec![],
         }
     }
 
@@ -1320,6 +1550,7 @@ mod tests {
             tpots: vec![5_000],
             e2e_latency_us: 200_000,
             token_count: 3,
+            item_count: 0,
             success: true,
             error: None,
         }];
@@ -1328,6 +1559,7 @@ mod tests {
 
         for key in [
             "avg_throughput_tok_s",
+            "avg_throughput_items_s",
             "success_rate_pct",
             "ttft_p50_ms",
             "tpot_p50_ms",
@@ -1351,6 +1583,7 @@ mod tests {
                 tpots: vec![5_000, 6_000],
                 e2e_latency_us: 200_000,
                 token_count: 3,
+                item_count: 0,
                 success: true,
                 error: None,
             },
@@ -1360,6 +1593,7 @@ mod tests {
                 tpots: vec![4_000, 7_000],
                 e2e_latency_us: 250_000,
                 token_count: 3,
+                item_count: 0,
                 success: true,
                 error: None,
             },
@@ -1382,6 +1616,7 @@ mod tests {
                 tpots: vec![5_000],
                 e2e_latency_us: 200_000,
                 token_count: 2,
+                item_count: 0,
                 success: true,
                 error: None,
             },
@@ -1391,6 +1626,7 @@ mod tests {
                 tpots: vec![],
                 e2e_latency_us: 0,
                 token_count: 0,
+                item_count: 0,
                 success: false,
                 error: Some("timeout".to_string()),
             },
@@ -1398,6 +1634,28 @@ mod tests {
 
         let report = compute_report(&config, &metrics);
         assert!(report.success_rate_pct == 50.0);
+    }
+
+    #[test]
+    fn test_compute_report_computes_item_throughput_separately_from_token_throughput() {
+        let config = make_config();
+        let metrics = vec![RequestMetrics {
+            request_id: 1,
+            ttft_us: 0,
+            tpots: vec![],
+            e2e_latency_us: 500_000, // 0.5s
+            token_count: 0,
+            item_count: 10,
+            success: true,
+            error: None,
+        }];
+
+        let report = compute_report(&config, &metrics);
+        assert_eq!(report.avg_throughput_tok_s, 0.0, "no tokens were generated (non-chat request)");
+        assert!(
+            report.avg_throughput_items_s > 0.0,
+            "10 items in 0.5s should produce a positive item throughput"
+        );
     }
 
     #[test]
@@ -1440,6 +1698,30 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let restored: BenchConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, config);
+    }
+
+    /// The frozen-schema guarantee (CLAUDE.md / README "Stability"): a config
+    /// file/preset saved by an older InferScope version — before
+    /// endpoint_type/embedding_inputs/rerank_query/rerank_documents
+    /// existed — must still load today, defaulting to chat mode.
+    #[test]
+    fn test_old_config_json_without_endpoint_type_fields_deserializes_to_chat_mode() {
+        let old_json = r#"{
+            "base_url": "http://localhost:8000/v1",
+            "model": "test-model",
+            "prompt": "hello",
+            "concurrency": 1,
+            "num_requests": 1,
+            "max_tokens": 10,
+            "temperature": 0.7
+        }"#;
+
+        let config: BenchConfig = serde_json::from_str(old_json).expect("old-shape config must still deserialize");
+
+        assert_eq!(config.endpoint_type, EndpointType::Chat);
+        assert!(config.embedding_inputs.is_empty());
+        assert_eq!(config.rerank_query, "");
+        assert!(config.rerank_documents.is_empty());
     }
 
     #[test]
@@ -1567,6 +1849,41 @@ mod tests {
     fn test_export_text_reports_error_for_unwritable_path() {
         let err = export_text("content".to_string(), "/nonexistent/deeply/nested/path.csv".to_string()).unwrap_err();
         assert!(err.contains("Failed to write file"));
+    }
+
+    /// Embeddings/rerank requests carry their per-request count in
+    /// item_count, not token_count — the CSV export must not silently drop
+    /// that column (it's the only per-request metric that matters for
+    /// those endpoint types).
+    #[test]
+    fn test_export_report_csv_includes_item_count_column() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Embeddings;
+        let metrics = vec![RequestMetrics {
+            request_id: 1,
+            ttft_us: 0,
+            tpots: vec![],
+            e2e_latency_us: 150_000,
+            token_count: 0,
+            item_count: 3,
+            success: true,
+            error: None,
+        }];
+        let report = compute_report(&config, &metrics);
+        let report_json = serde_json::to_string(&report).unwrap();
+
+        let dir = std::env::temp_dir().join(format!("inferscope_test_export_csv_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("report.csv");
+
+        export_report(&report_json, "csv".to_string(), path.to_string_lossy().to_string())
+            .expect("should export successfully");
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.starts_with("request_id,ttft_ms,tpot_avg_ms,e2e_ms,tokens,items,success,error"));
+        assert!(written.contains(",3,true,"), "row should carry item_count=3, got: {written}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1773,6 +2090,70 @@ mod tests {
     }
 
     #[test]
+    fn test_build_embeddings_url() {
+        assert_eq!(
+            build_embeddings_url("http://localhost:11434"),
+            "http://localhost:11434/v1/embeddings"
+        );
+        assert_eq!(
+            build_embeddings_url("http://localhost:11434/v1"),
+            "http://localhost:11434/v1/embeddings"
+        );
+    }
+
+    #[test]
+    fn test_build_rerank_url() {
+        assert_eq!(
+            build_rerank_url("http://localhost:11434"),
+            "http://localhost:11434/v1/rerank"
+        );
+        assert_eq!(
+            build_rerank_url("http://localhost:11434/v1"),
+            "http://localhost:11434/v1/rerank"
+        );
+    }
+
+    #[test]
+    fn test_build_embedding_input_cycles_through_the_list_and_prepends_cache_defeat_marker() {
+        let mut config = make_config();
+        config.embedding_inputs = vec!["alpha".to_string(), "beta".to_string()];
+
+        let first = build_embedding_input(&config, 1);
+        let second = build_embedding_input(&config, 2);
+        let third = build_embedding_input(&config, 3); // wraps back to "alpha"
+
+        assert!(first.ends_with("alpha"));
+        assert!(second.ends_with("beta"));
+        assert!(third.ends_with("alpha"));
+        assert!(first.starts_with("[bench-"));
+        assert_ne!(first, third, "the cache-defeat marker must make otherwise-identical inputs distinct");
+    }
+
+    #[test]
+    fn test_build_embedding_input_cycles_through_a_three_item_list() {
+        // Mirrors test_build_messages_cycles_prompt_pool's 3-item coverage —
+        // a 2-item list can't catch an off-by-one that only manifests once
+        // the list is longer than 2 (build_messages/build_embedding_input
+        // share the exact same (request_id-1)%len formula).
+        let mut config = make_config();
+        config.embedding_inputs = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+
+        assert!(build_embedding_input(&config, 1).ends_with("a"));
+        assert!(build_embedding_input(&config, 2).ends_with("b"));
+        assert!(build_embedding_input(&config, 3).ends_with("c"));
+        assert!(build_embedding_input(&config, 4).ends_with("a")); // wraps around
+    }
+
+    #[test]
+    fn test_build_embedding_input_falls_back_to_prompt_when_list_is_empty() {
+        let mut config = make_config();
+        config.embedding_inputs = vec![];
+        config.prompt = "fallback text".to_string();
+
+        assert!(build_embedding_input(&config, 1).ends_with("fallback text"));
+    }
+
+    #[test]
     fn test_extract_delta_text_prefers_content() {
         let choice = serde_json::json!({"delta": {"role": "assistant", "content": "hello", "reasoning": "ignored"}});
         assert_eq!(extract_delta_text(&choice), Some("hello"));
@@ -1918,8 +2299,12 @@ mod tests {
         (port, rx)
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_cache_defeat_marker_reaches_real_request_body() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let sse_payloads = vec![
             r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}"#.to_string(),
             "[DONE]".to_string(),
@@ -1944,8 +2329,12 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_attached_image_reaches_real_request_body() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let sse_payloads = vec![
             r#"{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}"#.to_string(),
             "[DONE]".to_string(),
@@ -2033,8 +2422,167 @@ mod tests {
         assert!(err.contains("404"));
     }
 
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_embeddings_request_reports_item_count_and_zero_ttft_tpot() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let body = r#"{"data":[{"embedding":[0.1,0.2,0.3],"index":0}],"model":"test-model"}"#.to_string();
+        let (port, _server) = spawn_mock_json_server("HTTP/1.1 200 OK", body).await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.endpoint_type = EndpointType::Embeddings;
+        config.embedding_inputs = vec!["some text to embed".to_string()];
+
+        let report = run_headless(config).await.expect("embeddings run should succeed");
+
+        assert_eq!(report.metrics.len(), 1);
+        assert!(report.metrics[0].success);
+        assert_eq!(report.metrics[0].item_count, 1, "the mock returned exactly one embedding vector");
+        assert_eq!(report.metrics[0].ttft_us, 0, "embeddings are non-streaming — no TTFT concept");
+        assert!(report.metrics[0].tpots.is_empty());
+        assert!(report.avg_throughput_items_s > 0.0);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_rerank_request_reports_item_count_matching_results_length() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let body = r#"{"results":[{"index":0,"relevance_score":0.9},{"index":1,"relevance_score":0.4}]}"#.to_string();
+        let (port, _server) = spawn_mock_json_server("HTTP/1.1 200 OK", body).await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.endpoint_type = EndpointType::Rerank;
+        config.rerank_query = "what is the capital of France?".to_string();
+        config.rerank_documents = vec!["Paris is the capital of France.".to_string(), "Bananas are yellow.".to_string()];
+
+        let report = run_headless(config).await.expect("rerank run should succeed");
+
+        assert_eq!(report.metrics.len(), 1);
+        assert!(report.metrics[0].success);
+        assert_eq!(report.metrics[0].item_count, 2, "the mock returned two ranked results");
+        assert_eq!(report.metrics[0].ttft_us, 0);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_embeddings_request_reports_http_error_status() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let (port, _server) = spawn_mock_json_server("HTTP/1.1 500 Internal Server Error", "{}".to_string()).await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.endpoint_type = EndpointType::Embeddings;
+        config.embedding_inputs = vec!["text".to_string()];
+
+        // A failed request still produces a RequestMetrics{success:false} entry
+        // rather than an Err — same convention as the chat path.
+        let report = run_headless(config).await.expect("run_headless should still produce a report");
+        assert_eq!(report.success_rate_pct, 0.0);
+        assert!(!report.metrics[0].success);
+        assert!(report.metrics[0].error.as_deref().unwrap_or("").contains("500"));
+    }
+
+    /// A CI-committed config.json that sets endpoint_type=rerank but forgets
+    /// rerank_documents must fail loudly, not silently run a whole benchmark
+    /// against zero documents and report "100% success, 0 throughput" as if
+    /// that were a normal result.
+    #[test]
+    fn test_validate_endpoint_config_rejects_rerank_with_no_documents() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Rerank;
+        config.rerank_query = "some query".to_string();
+        config.rerank_documents = vec![];
+
+        let err = validate_endpoint_config(&config).unwrap_err();
+        assert!(err.contains("rerank_documents"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_config_rejects_rerank_with_empty_query() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Rerank;
+        config.rerank_query = "   ".to_string();
+        config.rerank_documents = vec!["doc".to_string()];
+
+        let err = validate_endpoint_config(&config).unwrap_err();
+        assert!(err.contains("rerank_query"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_config_rejects_embeddings_with_no_input_at_all() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Embeddings;
+        config.embedding_inputs = vec![];
+        config.prompt = "  ".to_string(); // no usable fallback either
+
+        let err = validate_endpoint_config(&config).unwrap_err();
+        assert!(err.contains("embedding_inputs"));
+    }
+
+    #[test]
+    fn test_validate_endpoint_config_allows_embeddings_falling_back_to_prompt() {
+        let mut config = make_config();
+        config.endpoint_type = EndpointType::Embeddings;
+        config.embedding_inputs = vec![];
+        config.prompt = "use this as the input".to_string();
+
+        assert!(validate_endpoint_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_endpoint_config_allows_chat_regardless_of_the_new_fields() {
+        // Chat mode never looks at rerank_query/rerank_documents/embedding_inputs,
+        // so leaving them at their defaults must never be rejected.
+        let config = make_config();
+        assert!(validate_endpoint_config(&config).is_ok());
+    }
+
+    /// If the target server's response doesn't have the expected array field
+    /// (e.g. it's a differently-shaped rerank implementation like TEI, or
+    /// just a malformed/empty response), this must surface as a failed
+    /// request — not a silent "100% success, item_count: 0" report that
+    /// looks like a real (if unlucky) benchmark result.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn test_rerank_request_fails_loudly_when_response_is_missing_the_results_array() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        // Well-formed JSON, 200 OK, but no "results" array — e.g. a bare
+        // array response (TEI-style) or an error object with a 200 status.
+        let body = r#"{"message":"ok"}"#.to_string();
+        let (port, _server) = spawn_mock_json_server("HTTP/1.1 200 OK", body).await;
+
+        let mut config = make_config();
+        config.base_url = format!("http://127.0.0.1:{port}");
+        config.endpoint_type = EndpointType::Rerank;
+        config.rerank_query = "query".to_string();
+        config.rerank_documents = vec!["doc".to_string()];
+
+        let report = run_headless(config).await.expect("run_headless should still produce a report");
+        assert_eq!(report.success_rate_pct, 0.0, "a shape-mismatched response must not count as success");
+        assert!(!report.metrics[0].success);
+        assert!(
+            report.metrics[0].error.as_deref().unwrap_or("").contains("results"),
+            "error should name the missing field, got: {:?}",
+            report.metrics[0].error
+        );
+    }
+
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_run_request_inner_reports_connection_refused_detail() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         // Bind then immediately drop to get a port nothing is listening on.
         let port = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2187,8 +2735,12 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_zero_warmup_requests_is_a_no_op() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
 
         let mut config = make_config();
@@ -2236,8 +2788,12 @@ mod tests {
         CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_rate_based_mode_spaces_requests_by_the_configured_interval() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
 
         let mut config = make_config();
@@ -2260,8 +2816,12 @@ mod tests {
         );
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_rate_based_mode_includes_every_request_in_the_report() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
 
         let mut config = make_config();
@@ -2308,8 +2868,12 @@ mod tests {
         CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_zero_or_negative_rate_falls_back_to_concurrency_mode_without_panicking() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         for rate in [Some(0.0), Some(-5.0), Some(f64::NAN), None] {
             let (port, connection_count) = spawn_mock_sse_server_counting_connections().await;
 
@@ -2330,8 +2894,12 @@ mod tests {
     /// `success: false`), so the report comes back with a 0% success rate
     /// rather than an `Err` — `run_headless` only errors when the metrics
     /// list ends up genuinely empty (i.e. `num_requests == 0`).
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn test_run_headless_reports_zero_success_rate_when_nothing_is_listening() {
+        let _guard = CANCEL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        CANCEL_FLAG.store(false, std::sync::atomic::Ordering::SeqCst);
+
         let port = {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             listener.local_addr().unwrap().port()

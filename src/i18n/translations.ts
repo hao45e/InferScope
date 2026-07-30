@@ -33,6 +33,10 @@ export interface Translations {
     benchmarkModeLabel: string;
     singleModelTab: string;
     compareModelsTab: string;
+    sectionEndpointType: string;
+    endpointTypeChat: string;
+    endpointTypeEmbeddings: string;
+    endpointTypeRerank: string;
     addModel: string;
     compareTargetsLabel: string;
     modelComparisonTitle: string;
@@ -57,6 +61,14 @@ export interface Translations {
     rateModeToggle: string;
     requestRatePerSec: string;
     sectionPrompt: string;
+    sectionEmbeddingsInput: string;
+    sectionRerankInput: string;
+    embeddingInputsLabel: string;
+    embeddingInputsPlaceholder: string;
+    rerankQueryLabel: string;
+    rerankQueryPlaceholder: string;
+    rerankDocumentsLabel: string;
+    rerankDocumentsPlaceholder: string;
     singleTurn: string;
     multiTurn: string;
     promptLabel: string;
@@ -120,6 +132,8 @@ export interface Translations {
     successRate: string;
     ttftP50: string;
     tpotP90: string;
+    e2eP50Label: string;
+    e2eP99Label: string;
     percentileChartTitle: string;
     detailTableTitle: string;
     colIndex: string;
@@ -127,6 +141,7 @@ export interface Translations {
     colTpotAvg: string;
     colE2e: string;
     colTokens: string;
+    colItems: string;
     colStatus: string;
     statusSuccess: string;
     statusFailure: string;
@@ -153,6 +168,7 @@ export interface Translations {
     compareResultTitle: string;
     metricCol: string;
     metricThroughput: string;
+    metricItemThroughput: string;
     metricSuccessRate: string;
     metricTtftP50: string;
     metricTtftP99: string;
@@ -227,6 +243,10 @@ const en: Translations = {
     benchmarkModeLabel: "Benchmark Mode",
     singleModelTab: "Single Model",
     compareModelsTab: "Compare Models",
+    sectionEndpointType: "Endpoint Type",
+    endpointTypeChat: "Chat",
+    endpointTypeEmbeddings: "Embeddings",
+    endpointTypeRerank: "Rerank",
     addModel: "+ Add model",
     compareTargetsLabel: "Models to Compare",
     modelComparisonTitle: "Model Comparison",
@@ -251,6 +271,14 @@ const en: Translations = {
     rateModeToggle: "Use fixed request rate (open-loop)",
     requestRatePerSec: "Request Rate (req/s)",
     sectionPrompt: "Prompt",
+    sectionEmbeddingsInput: "Input",
+    sectionRerankInput: "Query & Documents",
+    embeddingInputsLabel: "Input texts (one per line, cycled per request)",
+    embeddingInputsPlaceholder: "One input text per line",
+    rerankQueryLabel: "Query",
+    rerankQueryPlaceholder: "The query to rank documents against",
+    rerankDocumentsLabel: "Candidate documents (one per line)",
+    rerankDocumentsPlaceholder: "One document per line",
     singleTurn: "Single-turn",
     multiTurn: "Multi-turn",
     promptLabel: "Prompt",
@@ -314,6 +342,8 @@ const en: Translations = {
     successRate: "Success Rate",
     ttftP50: "TTFT P50",
     tpotP90: "TPOT P90",
+    e2eP50Label: "E2E P50",
+    e2eP99Label: "E2E P99",
     percentileChartTitle: "Percentile Comparison (ms)",
     detailTableTitle: "Detailed Metrics",
     colIndex: "#",
@@ -321,6 +351,7 @@ const en: Translations = {
     colTpotAvg: "TPOT avg (ms)",
     colE2e: "E2E Latency (ms)",
     colTokens: "Tokens",
+    colItems: "Items",
     colStatus: "Status",
     statusSuccess: "Success",
     statusFailure: "Failed",
@@ -347,6 +378,7 @@ const en: Translations = {
     compareResultTitle: "Comparison",
     metricCol: "Metric",
     metricThroughput: "Avg Throughput",
+    metricItemThroughput: "Avg Throughput",
     metricSuccessRate: "Success Rate",
     metricTtftP50: "TTFT P50",
     metricTtftP99: "TTFT P99",
@@ -421,6 +453,10 @@ const zhCN: Translations = {
     benchmarkModeLabel: "压测模式",
     singleModelTab: "单个模型",
     compareModelsTab: "对比多个模型",
+    sectionEndpointType: "端点类型",
+    endpointTypeChat: "对话",
+    endpointTypeEmbeddings: "Embeddings",
+    endpointTypeRerank: "Rerank",
     addModel: "+ 添加模型",
     compareTargetsLabel: "对比模型",
     modelComparisonTitle: "模型对比结果",
@@ -445,6 +481,14 @@ const zhCN: Translations = {
     rateModeToggle: "使用固定请求速率（开环）",
     requestRatePerSec: "请求速率（请求/秒）",
     sectionPrompt: "Prompt",
+    sectionEmbeddingsInput: "输入",
+    sectionRerankInput: "查询与文档",
+    embeddingInputsLabel: "输入文本（每行一条，按请求循环使用）",
+    embeddingInputsPlaceholder: "每行一条输入文本",
+    rerankQueryLabel: "查询",
+    rerankQueryPlaceholder: "用来对文档排序的查询语句",
+    rerankDocumentsLabel: "候选文档（每行一条）",
+    rerankDocumentsPlaceholder: "每行一条文档",
     singleTurn: "单轮对话",
     multiTurn: "多轮对话",
     promptLabel: "Prompt",
@@ -508,6 +552,8 @@ const zhCN: Translations = {
     successRate: "成功率",
     ttftP50: "TTFT P50",
     tpotP90: "TPOT P90",
+    e2eP50Label: "E2E P50",
+    e2eP99Label: "E2E P99",
     percentileChartTitle: "百分位对比（毫秒）",
     detailTableTitle: "详细指标",
     colIndex: "#",
@@ -515,6 +561,7 @@ const zhCN: Translations = {
     colTpotAvg: "TPOT avg (ms)",
     colE2e: "E2E Latency (ms)",
     colTokens: "Tokens",
+    colItems: "条目数",
     colStatus: "状态",
     statusSuccess: "成功",
     statusFailure: "失败",
@@ -541,6 +588,7 @@ const zhCN: Translations = {
     compareResultTitle: "对比结果",
     metricCol: "指标",
     metricThroughput: "平均吞吐",
+    metricItemThroughput: "平均吞吐",
     metricSuccessRate: "成功率",
     metricTtftP50: "TTFT P50",
     metricTtftP99: "TTFT P99",
@@ -615,6 +663,10 @@ const zhTW: Translations = {
     benchmarkModeLabel: "壓測模式",
     singleModelTab: "單一模型",
     compareModelsTab: "比較多個模型",
+    sectionEndpointType: "端點類型",
+    endpointTypeChat: "對話",
+    endpointTypeEmbeddings: "Embeddings",
+    endpointTypeRerank: "Rerank",
     addModel: "+ 新增模型",
     compareTargetsLabel: "對比模型",
     modelComparisonTitle: "模型比較結果",
@@ -639,6 +691,14 @@ const zhTW: Translations = {
     rateModeToggle: "使用固定請求速率（開環）",
     requestRatePerSec: "請求速率（請求/秒）",
     sectionPrompt: "Prompt",
+    sectionEmbeddingsInput: "輸入",
+    sectionRerankInput: "查詢與文件",
+    embeddingInputsLabel: "輸入文字（每行一條，按請求循環使用）",
+    embeddingInputsPlaceholder: "每行一條輸入文字",
+    rerankQueryLabel: "查詢",
+    rerankQueryPlaceholder: "用來對文件排序的查詢語句",
+    rerankDocumentsLabel: "候選文件（每行一條）",
+    rerankDocumentsPlaceholder: "每行一條文件",
     singleTurn: "單輪對話",
     multiTurn: "多輪對話",
     promptLabel: "Prompt",
@@ -702,6 +762,8 @@ const zhTW: Translations = {
     successRate: "成功率",
     ttftP50: "TTFT P50",
     tpotP90: "TPOT P90",
+    e2eP50Label: "E2E P50",
+    e2eP99Label: "E2E P99",
     percentileChartTitle: "百分位對比（毫秒）",
     detailTableTitle: "詳細指標",
     colIndex: "#",
@@ -709,6 +771,7 @@ const zhTW: Translations = {
     colTpotAvg: "TPOT avg (ms)",
     colE2e: "E2E Latency (ms)",
     colTokens: "Tokens",
+    colItems: "條目數",
     colStatus: "狀態",
     statusSuccess: "成功",
     statusFailure: "失敗",
@@ -735,6 +798,7 @@ const zhTW: Translations = {
     compareResultTitle: "對比結果",
     metricCol: "指標",
     metricThroughput: "平均吞吐",
+    metricItemThroughput: "平均吞吐",
     metricSuccessRate: "成功率",
     metricTtftP50: "TTFT P50",
     metricTtftP99: "TTFT P99",
