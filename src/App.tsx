@@ -23,6 +23,7 @@ import type {
   CancelEvent,
   Message as BenchMessage,
   ReportSummary,
+  EndpointType,
 } from "./types/bench";
 import { translations, LANGUAGES, type Language, type Translations } from "./i18n/translations";
 import brandIcon from "./assets/brand-icon.png";
@@ -118,7 +119,7 @@ const REPORT_NUMERIC_FIELDS = [
   "ttft_p50_ms", "ttft_p90_ms", "ttft_p95_ms", "ttft_p99_ms",
   "tpot_p50_ms", "tpot_p90_ms", "tpot_p95_ms", "tpot_p99_ms",
   "e2e_p50_ms", "e2e_p90_ms", "e2e_p95_ms", "e2e_p99_ms",
-  "avg_throughput_tok_s", "success_rate_pct",
+  "avg_throughput_tok_s", "avg_throughput_items_s", "success_rate_pct",
 ] as const;
 
 // 兜底：报告可能来自磁盘上的旧格式文件（字段名对不上，比如改名前保存的
@@ -164,6 +165,7 @@ const LOG_LEVEL_VALUES: LogLevelSetting[] = ["debug", "info", "warn", "error"];
 // ─── Comparison helpers (history view + multi-model batch results) ─────
 type Translations_HistoryMetricLabels = {
   metricThroughput: string;
+  metricItemThroughput: string;
   metricSuccessRate: string;
   metricTtftP50: string;
   metricTtftP99: string;
@@ -176,23 +178,44 @@ type Translations_HistoryMetricLabels = {
 interface MultiCompareRow {
   labelKey: keyof Translations_HistoryMetricLabels;
   unit: string;
-  values: number[];
+  // null = 这一列的报告不适用这项指标（比如 chat 报告没有 items/s 吞吐，
+  // embeddings/rerank 报告没有 TTFT/TPOT）——渲染成 "–"，不参与最优值/差值
+  // 计算，而不是伪造一个 0 掺进比较。
+  values: (number | null)[];
   higherIsBetter: boolean;
   digits: number;
 }
 
-// 跟 buildCompareRows 结构一样，只是把 a/b 两栏换成任意多个模型的一列数组
+// 跟 buildCompareRows 结构一样，只是把 a/b 两栏换成任意多个模型的一列数组。
+// 对比目标（批量对比 / 并发扫描）通常都是同一个 endpoint_type，但 History
+// 页的多选对比允许用户任意勾选历史报告，可能勾出一个 chat 报告和一个
+// embeddings 报告放在一起对比——这种情况下不能只看 reports[0] 决定整张表
+// 用哪套指标（那样会把另一份报告的真实数字换成假的 0），而是每一行按"这份
+// 报告的 endpoint_type 是否适用这项指标"逐个报告判断，不适用就填 null。
+// 纯 chat 或纯非 chat 的对比里，不适用的那些行会被整行跳过，跟原来的表现
+// 完全一样。
 function buildMultiCompareRows(reports: BenchReport[]): MultiCompareRow[] {
-  return [
-    { labelKey: "metricThroughput", unit: "tokens/s", values: reports.map((r) => r.avg_throughput_tok_s), higherIsBetter: true, digits: 1 },
-    { labelKey: "metricSuccessRate", unit: "%", values: reports.map((r) => r.success_rate_pct), higherIsBetter: true, digits: 1 },
-    { labelKey: "metricTtftP50", unit: "ms", values: reports.map((r) => r.ttft_p50_ms), higherIsBetter: false, digits: 2 },
-    { labelKey: "metricTtftP99", unit: "ms", values: reports.map((r) => r.ttft_p99_ms), higherIsBetter: false, digits: 2 },
-    { labelKey: "metricTpotP50", unit: "ms", values: reports.map((r) => r.tpot_p50_ms), higherIsBetter: false, digits: 3 },
-    { labelKey: "metricTpotP99", unit: "ms", values: reports.map((r) => r.tpot_p99_ms), higherIsBetter: false, digits: 3 },
-    { labelKey: "metricE2eP50", unit: "ms", values: reports.map((r) => r.e2e_p50_ms), higherIsBetter: false, digits: 2 },
-    { labelKey: "metricE2eP99", unit: "ms", values: reports.map((r) => r.e2e_p99_ms), higherIsBetter: false, digits: 2 },
-  ];
+  const isChatReport = (r: BenchReport) => (r.config.endpoint_type ?? "chat") === "chat";
+  const anyChat = reports.some(isChatReport);
+  const anyNonChat = reports.some((r) => !isChatReport(r));
+
+  const rows: MultiCompareRow[] = [];
+  if (anyChat) {
+    rows.push({ labelKey: "metricThroughput", unit: "tokens/s", values: reports.map((r) => (isChatReport(r) ? r.avg_throughput_tok_s : null)), higherIsBetter: true, digits: 1 });
+  }
+  if (anyNonChat) {
+    rows.push({ labelKey: "metricItemThroughput", unit: "items/s", values: reports.map((r) => (isChatReport(r) ? null : (r.avg_throughput_items_s ?? 0))), higherIsBetter: true, digits: 1 });
+  }
+  rows.push({ labelKey: "metricSuccessRate", unit: "%", values: reports.map((r) => r.success_rate_pct), higherIsBetter: true, digits: 1 });
+  if (anyChat) {
+    rows.push({ labelKey: "metricTtftP50", unit: "ms", values: reports.map((r) => (isChatReport(r) ? r.ttft_p50_ms : null)), higherIsBetter: false, digits: 2 });
+    rows.push({ labelKey: "metricTtftP99", unit: "ms", values: reports.map((r) => (isChatReport(r) ? r.ttft_p99_ms : null)), higherIsBetter: false, digits: 2 });
+    rows.push({ labelKey: "metricTpotP50", unit: "ms", values: reports.map((r) => (isChatReport(r) ? r.tpot_p50_ms : null)), higherIsBetter: false, digits: 3 });
+    rows.push({ labelKey: "metricTpotP99", unit: "ms", values: reports.map((r) => (isChatReport(r) ? r.tpot_p99_ms : null)), higherIsBetter: false, digits: 3 });
+  }
+  rows.push({ labelKey: "metricE2eP50", unit: "ms", values: reports.map((r) => r.e2e_p50_ms), higherIsBetter: false, digits: 2 });
+  rows.push({ labelKey: "metricE2eP99", unit: "ms", values: reports.map((r) => r.e2e_p99_ms), higherIsBetter: false, digits: 2 });
+  return rows;
 }
 
 // 给一个字段做 CSV 转义——含逗号/引号/换行就用双引号包起来，内部的引号
@@ -216,6 +239,12 @@ function parseSweepLevels(input: string): number[] {
   )).sort((a, b) => a - b);
 }
 
+// 自由输入的多行文本框（embeddings 的输入文本、rerank 的候选文档）统一
+// 用这份"每行一条、去空白、丢空行"的规则切成数组。
+function parseLines(input: string): string[] {
+  return input.split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
 // N 列对比表——多模型批量对比结果页、History 多选对比复用同一份渲染逻辑。
 // "最优值"只在成功率 > 0 的报告间比较（全部请求失败时 percentile 退化成 0，
 // 不能算数），非最优的格子额外标一个"跟最优差多少"的小字。
@@ -236,19 +265,24 @@ function renderMultiMetricTable(entries: { label: string; report: BenchReport }[
         </thead>
         <tbody>
           {rows.map((row) => {
-            const rounded = row.values.map((v) => Number(v.toFixed(row.digits)));
-            const best = validIndices.length > 0
+            const rounded = row.values.map((v) => (v === null ? null : Number(v.toFixed(row.digits))));
+            const numericValidIndices = validIndices.filter((i) => rounded[i] !== null);
+            const best = numericValidIndices.length > 0
               ? (row.higherIsBetter
-                ? Math.max(...validIndices.map((i) => rounded[i]))
-                : Math.min(...validIndices.map((i) => rounded[i])))
+                ? Math.max(...numericValidIndices.map((i) => rounded[i] as number))
+                : Math.min(...numericValidIndices.map((i) => rounded[i] as number)))
               : undefined;
             return (
               <tr key={row.labelKey}>
                 <td>{t.history[row.labelKey]} <span className="unit-hint">({row.unit})</span></td>
                 {row.values.map((v, i) => {
-                  const isBest = best !== undefined && rounded[i] === best && validIndices.includes(i);
-                  const showDelta = best !== undefined && validIndices.includes(i) && !isBest;
-                  const diff = rounded[i] - (best ?? 0);
+                  if (v === null) {
+                    return <td key={i} className="hint">–</td>;
+                  }
+                  const r = rounded[i] as number;
+                  const isBest = best !== undefined && r === best && numericValidIndices.includes(i);
+                  const showDelta = best !== undefined && numericValidIndices.includes(i) && !isBest;
+                  const diff = r - (best ?? 0);
                   const sign = diff > 0 ? "+" : "";
                   return (
                     <td key={i} className={isBest ? "best-value" : undefined}>
@@ -370,6 +404,20 @@ function App() {
   const [rateMode, setRateMode] = useState(false);
   const [requestRateInput, setRequestRateInput] = useState("10");
 
+  // 端点类型——直接存在 config.endpoint_type 上（跟 base_url 一样，不用
+  // 单独的派生 UI 状态），因为它本来就是个简单的三选一字符串字段，不像
+  // request_rate_per_sec 那样需要"开关 + 数值"两个状态合成一个 Option。
+  // embedding_inputs/rerank_documents 是自由输入的多行文本，用独立的
+  // "原始文本"状态装着，只在 buildEffectiveConfig 里才切分成数组——跟
+  // importedPrompts 不一样，这里不能每次按键都重新切分再拼回 textarea，
+  // 否则打字打到一半（比如刚按完回车还没输入下一行）就会被过滤掉空行，
+  // 光标体验会很怪。
+  const [embeddingInputsText, setEmbeddingInputsText] = useState("");
+  const [rerankDocumentsText, setRerankDocumentsText] = useState("");
+
+  const setEndpointType = (endpointType: EndpointType) =>
+    setConfig((c) => ({ ...c, endpoint_type: endpointType }));
+
   // config presets
   const [presets, setPresets] = useState<string[]>([]);
   const [selectedPresetName, setSelectedPresetName] = useState("");
@@ -474,6 +522,11 @@ function App() {
     const hasRate = typeof rate === "number" && Number.isFinite(rate) && rate > 0;
     setRateMode(hasRate);
     if (hasRate) setRequestRateInput(String(rate));
+    // embedding_inputs/rerank_documents live in config as arrays, but the
+    // Config tab edits them as free-typed textareas — rebuild that raw text
+    // from the array so a loaded preset/last-config round-trips visibly.
+    setEmbeddingInputsText((loaded.embedding_inputs ?? []).join("\n"));
+    setRerankDocumentsText((loaded.rerank_documents ?? []).join("\n"));
   }, []);
 
   // 启动时自动读回上一次实际用过的配置（跟下面命名预设列表是两回事）
@@ -650,6 +703,9 @@ function App() {
   // 把多轮对话消息 / 循环 prompt 池 / 限速模式的速率同步进最终发给后端的配置
   const buildEffectiveConfig = useCallback((): BenchConfig => {
     const parsedRate = Number(requestRateInput);
+    const endpointType = config.endpoint_type ?? "chat";
+    const isEmbeddings = endpointType === "embeddings";
+    const isRerank = endpointType === "rerank";
     return {
       ...config,
       messages: multiTurnMode ? messagePairs : [],
@@ -658,8 +714,23 @@ function App() {
           ? importedPrompts
           : [],
       request_rate_per_sec: rateMode && Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : null,
+      // 只在对应模式下才把这些字段填进去，切走之后清空——不然切换模式后
+      // 之前打的文本会作为"死数据"悄悄留在保存的配置/预设里。
+      embedding_inputs: isEmbeddings ? parseLines(embeddingInputsText) : [],
+      rerank_query: isRerank ? (config.rerank_query || "") : "",
+      rerank_documents: isRerank ? parseLines(rerankDocumentsText) : [],
     };
-  }, [config, multiTurnMode, messagePairs, usePromptCycling, importedPrompts, rateMode, requestRateInput]);
+  }, [
+    config,
+    multiTurnMode,
+    messagePairs,
+    usePromptCycling,
+    importedPrompts,
+    rateMode,
+    requestRateInput,
+    embeddingInputsText,
+    rerankDocumentsText,
+  ]);
 
   const updateConfig = <K extends keyof BenchConfig>(key: K) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -953,7 +1024,7 @@ function App() {
         const header = ["Metric", ...entries.map((e) => e.label)].map(csvEscape).join(",");
         const lines = rows.map((row) => {
           const label = `${t.history[row.labelKey]} (${row.unit})`;
-          const values = row.values.map((v) => v.toFixed(row.digits));
+          const values = row.values.map((v) => (v === null ? "" : v.toFixed(row.digits)));
           return [label, ...values].map(csvEscape).join(",");
         });
         content = [header, ...lines].join("\n");
@@ -1293,6 +1364,15 @@ function App() {
         </div>
 
         <div className="panel-block">
+          <h3 className="panel-block-title">{t.config.sectionEndpointType}</h3>
+          <div className="segmented">
+            <button className={"segmented-btn" + ((config.endpoint_type ?? "chat") === "chat" ? " active" : "")} onClick={() => setEndpointType("chat")}>{t.config.endpointTypeChat}</button>
+            <button className={"segmented-btn" + (config.endpoint_type === "embeddings" ? " active" : "")} onClick={() => setEndpointType("embeddings")}>{t.config.endpointTypeEmbeddings}</button>
+            <button className={"segmented-btn" + (config.endpoint_type === "rerank" ? " active" : "")} onClick={() => setEndpointType("rerank")}>{t.config.endpointTypeRerank}</button>
+          </div>
+        </div>
+
+        <div className="panel-block">
           <h3 className="panel-block-title">{t.config.sectionPresets}</h3>
           <div className="preset-picker" ref={presetPickerRef}>
             {selectedPresetName ? (
@@ -1392,7 +1472,9 @@ function App() {
                 disabled={
                   (multiModelMode && compareTargets.every((tg) => !tg.model.trim() || !tg.base_url.trim())) ||
                   (concurrencySweepMode && parseSweepLevels(sweepConcurrencyInput).length === 0) ||
-                  (rateMode && !(Number.isFinite(Number(requestRateInput)) && Number(requestRateInput) > 0))
+                  (rateMode && !(Number.isFinite(Number(requestRateInput)) && Number(requestRateInput) > 0)) ||
+                  ((config.endpoint_type ?? "chat") === "embeddings" && !embeddingInputsText.trim()) ||
+                  ((config.endpoint_type ?? "chat") === "rerank" && (!config.rerank_query?.trim() || !rerankDocumentsText.trim()))
                 }
               >
                 {status === "done" ? t.config.restartBench : t.config.startBench}
@@ -1607,91 +1689,132 @@ function App() {
         </div>
 
         <div className="panel-block">
-          <h3 className="panel-block-title">{t.config.sectionPrompt}</h3>
-          <div className="segmented">
-            <button className={"segmented-btn" + (!multiTurnMode ? " active" : "")} onClick={() => setMultiTurnMode(false)}>{t.config.singleTurn}</button>
-            <button className={"segmented-btn" + (multiTurnMode ? " active" : "")} onClick={() => setMultiTurnMode(true)}>{t.config.multiTurn}</button>
-          </div>
+          <h3 className="panel-block-title">
+            {(config.endpoint_type ?? "chat") === "chat"
+              ? t.config.sectionPrompt
+              : config.endpoint_type === "embeddings"
+                ? t.config.sectionEmbeddingsInput
+                : t.config.sectionRerankInput}
+          </h3>
 
-          {!multiTurnMode ? (
-            <div className="field">
-              <span className="field-label">{t.config.promptLabel}</span>
-              <textarea rows={5} value={config.prompt} onChange={updateConfig("prompt")} />
-              <div className="field-row-actions">
-                <button className="btn btn-secondary btn-sm" onClick={handleImportPrompts}>{t.config.importPrompts}</button>
-                {importedPrompts.length > 0 && (
-                  <span className="hint hint-success">{t.config.importedCount(importedPrompts.length)}</span>
-                )}
+          {(config.endpoint_type ?? "chat") === "chat" && (
+            <>
+              <div className="segmented">
+                <button className={"segmented-btn" + (!multiTurnMode ? " active" : "")} onClick={() => setMultiTurnMode(false)}>{t.config.singleTurn}</button>
+                <button className={"segmented-btn" + (multiTurnMode ? " active" : "")} onClick={() => setMultiTurnMode(true)}>{t.config.multiTurn}</button>
               </div>
-              <div className="field-row-actions">
-                <input
-                  type="number"
-                  min="1"
-                  value={syntheticTokenTarget}
-                  onChange={(e) => setSyntheticTokenTarget(e.target.value)}
-                  className="input-sm synthetic-token-input"
-                  placeholder={t.config.syntheticTokensPlaceholder}
-                />
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleGenerateSyntheticPrompt}
-                  disabled={generatingSyntheticPrompt}
-                >
-                  {generatingSyntheticPrompt ? t.config.generatingSyntheticPrompt : t.config.generateSyntheticPrompt}
-                </button>
-              </div>
-              <div className="field-divider" />
-              <span className="field-label">{t.config.imageInputLabel}</span>
-              <div className="field-row-actions">
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleAttachImage}
-                  disabled={attachingImage}
-                >
-                  {attachingImage ? t.config.attachingImage : t.config.attachImage}
-                </button>
-                {config.image_data_url && (
-                  <span className="image-attachment-preview">
-                    <img src={config.image_data_url} alt="" className="image-attachment-thumb" />
-                    <button type="button" className="btn btn-ghost btn-xs" onClick={handleRemoveImage}>
-                      {t.config.removeImage}
+
+              {!multiTurnMode ? (
+                <div className="field">
+                  <span className="field-label">{t.config.promptLabel}</span>
+                  <textarea rows={5} value={config.prompt} onChange={updateConfig("prompt")} />
+                  <div className="field-row-actions">
+                    <button className="btn btn-secondary btn-sm" onClick={handleImportPrompts}>{t.config.importPrompts}</button>
+                    {importedPrompts.length > 0 && (
+                      <span className="hint hint-success">{t.config.importedCount(importedPrompts.length)}</span>
+                    )}
+                  </div>
+                  <div className="field-row-actions">
+                    <input
+                      type="number"
+                      min="1"
+                      value={syntheticTokenTarget}
+                      onChange={(e) => setSyntheticTokenTarget(e.target.value)}
+                      className="input-sm synthetic-token-input"
+                      placeholder={t.config.syntheticTokensPlaceholder}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleGenerateSyntheticPrompt}
+                      disabled={generatingSyntheticPrompt}
+                    >
+                      {generatingSyntheticPrompt ? t.config.generatingSyntheticPrompt : t.config.generateSyntheticPrompt}
                     </button>
-                  </span>
-                )}
-              </div>
-              {importedPrompts.length > 0 && (
-                <label className="checkbox-field">
-                  <input type="checkbox" checked={usePromptCycling} onChange={(e) => setUsePromptCycling(e.target.checked)} />
-                  {t.config.cyclePrompts}
-                </label>
-              )}
-            </div>
-          ) : (
-            <div className="message-list">
-              {messagePairs.map((pair, idx) => (
-                <div key={idx} className="message-row">
-                  <select
-                    value={pair.role}
-                    onChange={(e) => { const next = messagePairs.slice(); next[idx] = { ...next[idx], role: e.target.value }; setMessagePairs(next); }}
-                    className="select-sm"
-                  >
-                    <option value="system">{t.config.roleSystem}</option>
-                    <option value="user">{t.config.roleUser}</option>
-                    <option value="assistant">{t.config.roleAssistant}</option>
-                  </select>
-                  <input
-                    value={pair.content}
-                    onChange={(e) => { const next = messagePairs.slice(); next[idx] = { ...next[idx], content: e.target.value }; setMessagePairs(next); }}
-                    placeholder={t.config.messageContentPlaceholder}
-                    className="input-sm message-content-input"
-                  />
-                  <button className="btn btn-ghost btn-icon" onClick={() => { const next = messagePairs.slice(); next.splice(idx, 1); setMessagePairs(next); }}>×</button>
+                  </div>
+                  <div className="field-divider" />
+                  <span className="field-label">{t.config.imageInputLabel}</span>
+                  <div className="field-row-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleAttachImage}
+                      disabled={attachingImage}
+                    >
+                      {attachingImage ? t.config.attachingImage : t.config.attachImage}
+                    </button>
+                    {config.image_data_url && (
+                      <span className="image-attachment-preview">
+                        <img src={config.image_data_url} alt="" className="image-attachment-thumb" />
+                        <button type="button" className="btn btn-ghost btn-xs" onClick={handleRemoveImage}>
+                          {t.config.removeImage}
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                  {importedPrompts.length > 0 && (
+                    <label className="checkbox-field">
+                      <input type="checkbox" checked={usePromptCycling} onChange={(e) => setUsePromptCycling(e.target.checked)} />
+                      {t.config.cyclePrompts}
+                    </label>
+                  )}
                 </div>
-              ))}
-              <button className="btn btn-secondary btn-sm" onClick={() => setMessagePairs((p) => [...p, { role: "user", content: "" }])}>{t.config.addMessage}</button>
+              ) : (
+                <div className="message-list">
+                  {messagePairs.map((pair, idx) => (
+                    <div key={idx} className="message-row">
+                      <select
+                        value={pair.role}
+                        onChange={(e) => { const next = messagePairs.slice(); next[idx] = { ...next[idx], role: e.target.value }; setMessagePairs(next); }}
+                        className="select-sm"
+                      >
+                        <option value="system">{t.config.roleSystem}</option>
+                        <option value="user">{t.config.roleUser}</option>
+                        <option value="assistant">{t.config.roleAssistant}</option>
+                      </select>
+                      <input
+                        value={pair.content}
+                        onChange={(e) => { const next = messagePairs.slice(); next[idx] = { ...next[idx], content: e.target.value }; setMessagePairs(next); }}
+                        placeholder={t.config.messageContentPlaceholder}
+                        className="input-sm message-content-input"
+                      />
+                      <button className="btn btn-ghost btn-icon" onClick={() => { const next = messagePairs.slice(); next.splice(idx, 1); setMessagePairs(next); }}>×</button>
+                    </div>
+                  ))}
+                  <button className="btn btn-secondary btn-sm" onClick={() => setMessagePairs((p) => [...p, { role: "user", content: "" }])}>{t.config.addMessage}</button>
+                </div>
+              )}
+            </>
+          )}
+
+          {config.endpoint_type === "embeddings" && (
+            <div className="field">
+              <span className="field-label">{t.config.embeddingInputsLabel}</span>
+              <textarea
+                rows={6}
+                value={embeddingInputsText}
+                onChange={(e) => setEmbeddingInputsText(e.target.value)}
+                placeholder={t.config.embeddingInputsPlaceholder}
+              />
             </div>
+          )}
+
+          {config.endpoint_type === "rerank" && (
+            <>
+              <div className="field">
+                <span className="field-label">{t.config.rerankQueryLabel}</span>
+                <input value={config.rerank_query || ""} onChange={updateConfig("rerank_query")} placeholder={t.config.rerankQueryPlaceholder} />
+              </div>
+              <div className="field">
+                <span className="field-label">{t.config.rerankDocumentsLabel}</span>
+                <textarea
+                  rows={6}
+                  value={rerankDocumentsText}
+                  onChange={(e) => setRerankDocumentsText(e.target.value)}
+                  placeholder={t.config.rerankDocumentsPlaceholder}
+                />
+              </div>
+            </>
           )}
         </div>
       </aside>
@@ -1719,23 +1842,30 @@ function App() {
             <span className="stat-label">{t.config.statusLabel}</span>
             <span className="stat-value stat-value-text">{status === "idle" ? t.config.statusIdle : status === "running" ? t.config.statusRunning : t.config.statusDone}</span>
           </div>
-          <div className="stat-tile">
-            <span className="stat-label">{t.config.recentTtft}</span>
-            <span className="stat-value">{lastMetric ? lastMetric.ttft.toFixed(1) : "–"}</span>
-            <span className="stat-unit">ms</span>
-          </div>
-          <div className="stat-tile">
-            <span className="stat-label">{t.config.recentTpot}</span>
-            <span className="stat-value">{lastMetric ? lastMetric.tpot.toFixed(2) : "–"}</span>
-            <span className="stat-unit">ms</span>
-          </div>
-          {result?.kind === "single" && (
-            <div className="stat-tile accent">
-              <span className="stat-label">{t.config.avgThroughput}</span>
-              <span className="stat-value">{result.report.avg_throughput_tok_s.toFixed(1)}</span>
-              <span className="stat-unit">tokens/s</span>
-            </div>
+          {(config.endpoint_type ?? "chat") === "chat" && (
+            <>
+              <div className="stat-tile">
+                <span className="stat-label">{t.config.recentTtft}</span>
+                <span className="stat-value">{lastMetric ? lastMetric.ttft.toFixed(1) : "–"}</span>
+                <span className="stat-unit">ms</span>
+              </div>
+              <div className="stat-tile">
+                <span className="stat-label">{t.config.recentTpot}</span>
+                <span className="stat-value">{lastMetric ? lastMetric.tpot.toFixed(2) : "–"}</span>
+                <span className="stat-unit">ms</span>
+              </div>
+            </>
           )}
+          {result?.kind === "single" && (() => {
+            const isChat = (result.report.config.endpoint_type ?? "chat") === "chat";
+            return (
+              <div className="stat-tile accent">
+                <span className="stat-label">{t.config.avgThroughput}</span>
+                <span className="stat-value">{(isChat ? result.report.avg_throughput_tok_s : (result.report.avg_throughput_items_s ?? 0)).toFixed(1)}</span>
+                <span className="stat-unit">{isChat ? "tokens/s" : "items/s"}</span>
+              </div>
+            );
+          })()}
         </div>
 
         <div className="chart-card">
@@ -1803,11 +1933,14 @@ function App() {
   );
 
   const renderSweepView = (sweepResults: { concurrency: number; report: BenchReport }[]) => {
+    const isChat = (sweepResults[0]?.report.config.endpoint_type ?? "chat") === "chat";
     const chartData = sweepResults.map((s) => ({
       concurrency: s.concurrency,
-      throughput: s.report.avg_throughput_tok_s,
-      ttft: s.report.ttft_p50_ms,
+      throughput: isChat ? s.report.avg_throughput_tok_s : (s.report.avg_throughput_items_s ?? 0),
+      latency: isChat ? s.report.ttft_p50_ms : s.report.e2e_p50_ms,
     }));
+    const throughputUnit = isChat ? "tokens/s" : "items/s";
+    const latencyLegendLabel = isChat ? "TTFT P50" : "E2E P50";
     const sweepEntries = sweepResults.map((s) => ({ label: `c=${s.concurrency}`, report: s.report }));
     return (
       <div className="view">
@@ -1830,7 +1963,7 @@ function App() {
             <h3>{t.config.sweepChartTitle}</h3>
             <div className="legend">
               <span className="legend-item"><i className="legend-dot" style={{ background: CHART_THROUGHPUT }} />{t.config.sweepThroughputLegend}</span>
-              <span className="legend-item"><i className="legend-dot" style={{ background: CHART_TTFT }} />TTFT P50</span>
+              <span className="legend-item"><i className="legend-dot" style={{ background: CHART_TTFT }} />{latencyLegendLabel}</span>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={300}>
@@ -1846,7 +1979,7 @@ function App() {
                 yAxisId="throughput"
                 stroke={chartChrome.axis}
                 tick={{ fontSize: 11 }}
-                label={{ value: "tokens/s", angle: -90, position: "insideLeft", fill: chartChrome.axis, fontSize: 11 }}
+                label={{ value: throughputUnit, angle: -90, position: "insideLeft", fill: chartChrome.axis, fontSize: 11 }}
               />
               <YAxis
                 yAxisId="latency"
@@ -1860,7 +1993,7 @@ function App() {
                 labelStyle={{ color: chartChrome.tooltipText }}
               />
               <Line yAxisId="throughput" type="monotone" dataKey="throughput" stroke={CHART_THROUGHPUT} strokeWidth={2} dot name="Throughput" />
-              <Line yAxisId="latency" type="monotone" dataKey="ttft" stroke={CHART_TTFT} strokeWidth={2} dot name="TTFT P50" />
+              <Line yAxisId="latency" type="monotone" dataKey="latency" stroke={CHART_TTFT} strokeWidth={2} dot name={latencyLegendLabel} />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -1893,11 +2026,14 @@ function App() {
       return renderBatchComparisonView(result.results);
     }
     const r = result.report;
-    const pctData = [
-      { name: "TTFT", p50: r.ttft_p50_ms, p90: r.ttft_p90_ms, p95: r.ttft_p95_ms, p99: r.ttft_p99_ms },
-      { name: "TPOT", p50: r.tpot_p50_ms, p90: r.tpot_p90_ms, p95: r.tpot_p95_ms, p99: r.tpot_p99_ms },
-      { name: "E2E", p50: r.e2e_p50_ms, p90: r.e2e_p90_ms, p95: r.e2e_p95_ms, p99: r.e2e_p99_ms },
-    ];
+    const isChat = (r.config.endpoint_type ?? "chat") === "chat";
+    const pctData = isChat
+      ? [
+          { name: "TTFT", p50: r.ttft_p50_ms, p90: r.ttft_p90_ms, p95: r.ttft_p95_ms, p99: r.ttft_p99_ms },
+          { name: "TPOT", p50: r.tpot_p50_ms, p90: r.tpot_p90_ms, p95: r.tpot_p95_ms, p99: r.tpot_p99_ms },
+          { name: "E2E", p50: r.e2e_p50_ms, p90: r.e2e_p90_ms, p95: r.e2e_p95_ms, p99: r.e2e_p99_ms },
+        ]
+      : [{ name: "E2E", p50: r.e2e_p50_ms, p90: r.e2e_p90_ms, p95: r.e2e_p95_ms, p99: r.e2e_p99_ms }];
 
     return (
       <div className="view">
@@ -1915,24 +2051,41 @@ function App() {
         <section className="metric-cards">
           <div className="stat-tile accent">
             <span className="stat-label">{t.results.avgThroughput}</span>
-            <span className="stat-value">{r.avg_throughput_tok_s.toFixed(1)}</span>
-            <span className="stat-unit">tokens/s</span>
+            <span className="stat-value">{(isChat ? r.avg_throughput_tok_s : (r.avg_throughput_items_s ?? 0)).toFixed(1)}</span>
+            <span className="stat-unit">{isChat ? "tokens/s" : "items/s"}</span>
           </div>
           <div className={"stat-tile" + (r.success_rate_pct >= 99.5 ? " good" : r.success_rate_pct < 90 ? " critical" : "")}>
             <span className="stat-label">{t.results.successRate}</span>
             <span className="stat-value">{r.success_rate_pct.toFixed(1)}</span>
             <span className="stat-unit">%</span>
           </div>
-          <div className="stat-tile">
-            <span className="stat-label">{t.results.ttftP50}</span>
-            <span className="stat-value">{r.ttft_p50_ms.toFixed(2)}</span>
-            <span className="stat-unit">ms</span>
-          </div>
-          <div className="stat-tile">
-            <span className="stat-label">{t.results.tpotP90}</span>
-            <span className="stat-value">{r.tpot_p90_ms.toFixed(3)}</span>
-            <span className="stat-unit">ms</span>
-          </div>
+          {isChat ? (
+            <>
+              <div className="stat-tile">
+                <span className="stat-label">{t.results.ttftP50}</span>
+                <span className="stat-value">{r.ttft_p50_ms.toFixed(2)}</span>
+                <span className="stat-unit">ms</span>
+              </div>
+              <div className="stat-tile">
+                <span className="stat-label">{t.results.tpotP90}</span>
+                <span className="stat-value">{r.tpot_p90_ms.toFixed(3)}</span>
+                <span className="stat-unit">ms</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="stat-tile">
+                <span className="stat-label">{t.results.e2eP50Label}</span>
+                <span className="stat-value">{r.e2e_p50_ms.toFixed(2)}</span>
+                <span className="stat-unit">ms</span>
+              </div>
+              <div className="stat-tile">
+                <span className="stat-label">{t.results.e2eP99Label}</span>
+                <span className="stat-value">{r.e2e_p99_ms.toFixed(2)}</span>
+                <span className="stat-unit">ms</span>
+              </div>
+            </>
+          )}
         </section>
 
         <section className="chart-card">
@@ -1963,15 +2116,24 @@ function App() {
           <h3>{t.results.detailTableTitle}</h3>
           <div className="table-scroll">
             <table className="data-table">
-              <thead><tr><th>{t.results.colIndex}</th><th>{t.results.colTtft}</th><th>{t.results.colTpotAvg}</th><th>{t.results.colE2e}</th><th>{t.results.colTokens}</th><th>{t.results.colStatus}</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>{t.results.colIndex}</th>
+                  {isChat && <th>{t.results.colTtft}</th>}
+                  {isChat && <th>{t.results.colTpotAvg}</th>}
+                  <th>{t.results.colE2e}</th>
+                  <th>{isChat ? t.results.colTokens : t.results.colItems}</th>
+                  <th>{t.results.colStatus}</th>
+                </tr>
+              </thead>
               <tbody>
                 {r.metrics.map((m) => (
                   <tr key={m.request_id}>
                     <td>{m.request_id}</td>
-                    <td>{fmtMs(m.ttft_us)}</td>
-                    <td>{m.tpots.length > 0 ? (m.tpots.reduce((a, b) => a + b, 0) / m.tpots.length / 1000).toFixed(4) : "-"}</td>
+                    {isChat && <td>{fmtMs(m.ttft_us)}</td>}
+                    {isChat && <td>{m.tpots.length > 0 ? (m.tpots.reduce((a, b) => a + b, 0) / m.tpots.length / 1000).toFixed(4) : "-"}</td>}
                     <td>{fmtMs(m.e2e_latency_us)}</td>
-                    <td>{m.token_count}</td>
+                    <td>{isChat ? m.token_count : (m.item_count ?? 0)}</td>
                     <td><span className={"badge " + (m.success ? "badge-good" : "badge-critical")}>{m.success ? t.results.statusSuccess : t.results.statusFailure}</span></td>
                   </tr>
                 ))}

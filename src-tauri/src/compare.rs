@@ -88,6 +88,7 @@ fn metrics_to_check(baseline: &BenchReport, new: &BenchReport) -> Vec<MetricChec
         MetricCheck { name: "e2e_p95_ms", baseline: baseline.e2e_p95_ms, new: new.e2e_p95_ms, direction: LowerIsBetter },
         MetricCheck { name: "e2e_p99_ms", baseline: baseline.e2e_p99_ms, new: new.e2e_p99_ms, direction: LowerIsBetter },
         MetricCheck { name: "avg_throughput_tok_s", baseline: baseline.avg_throughput_tok_s, new: new.avg_throughput_tok_s, direction: HigherIsBetter },
+        MetricCheck { name: "avg_throughput_items_s", baseline: baseline.avg_throughput_items_s, new: new.avg_throughput_items_s, direction: HigherIsBetter },
         MetricCheck { name: "success_rate_pct", baseline: baseline.success_rate_pct, new: new.success_rate_pct, direction: HigherIsBetter },
     ]
 }
@@ -202,6 +203,19 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
+
+    // chat/embeddings/rerank 报告的指标形状完全不同（比如 chat 的
+    // avg_throughput_tok_s 在 embeddings/rerank 报告里恒为 0，反之
+    // avg_throughput_items_s 在 chat 报告里恒为 0）——两份端点类型不同的
+    // 报告直接逐项比较，一定会把"根本不适用"误判成"退化了 100%"，
+    // 必须在这里就拦下来，而不是让 CI 因为一个假阳性而挂掉。
+    if baseline.config.endpoint_type != new.config.endpoint_type {
+        eprintln!(
+            "Error: cannot compare reports with different endpoint types ({:?} vs {:?}) — their metrics aren't comparable",
+            baseline.config.endpoint_type, new.config.endpoint_type
+        );
+        return 2;
+    }
 
     let checks = metrics_to_check(&baseline, &new);
     let results: Vec<MetricResult> = checks.iter().map(|c| evaluate(c, parsed.max_regression_pct)).collect();
@@ -337,6 +351,10 @@ mod tests {
                 image_data_url: None,
                 warmup_requests: 0,
                 request_rate_per_sec: None,
+                endpoint_type: crate::bench::EndpointType::Chat,
+                embedding_inputs: vec![],
+                rerank_query: String::new(),
+                rerank_documents: vec![],
             },
             metrics: vec![],
             ttft_p50_ms: ttft_p50,
@@ -352,6 +370,7 @@ mod tests {
             e2e_p95_ms: 200.0,
             e2e_p99_ms: 200.0,
             avg_throughput_tok_s: throughput,
+            avg_throughput_items_s: 0.0,
             success_rate_pct: success_rate,
         }
     }
@@ -404,5 +423,33 @@ mod tests {
     fn test_run_reports_error_for_missing_file() {
         let exit_code = run(&["/nonexistent/baseline.json".to_string(), "/nonexistent/new.json".to_string()]);
         assert_eq!(exit_code, 2);
+    }
+
+    /// chat reports always have avg_throughput_tok_s and never
+    /// avg_throughput_items_s (and vice versa for embeddings/rerank), so
+    /// comparing across endpoint types would otherwise look like a 100%
+    /// regression on whichever metric happens to be structurally zero —
+    /// this must be rejected outright rather than silently misreported.
+    #[test]
+    fn test_run_rejects_comparing_reports_with_different_endpoint_types() {
+        let dir = std::env::temp_dir().join(format!("inferscope_test_compare_endpoint_mismatch_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let baseline_path = dir.join("baseline.json");
+        let new_path = dir.join("new.json");
+
+        let baseline = make_report(50.0, 100.0, 100.0); // defaults to EndpointType::Chat
+        let mut new = make_report(50.0, 100.0, 100.0);
+        new.config.endpoint_type = crate::bench::EndpointType::Embeddings;
+
+        std::fs::write(&baseline_path, serde_json::to_string(&baseline).unwrap()).unwrap();
+        std::fs::write(&new_path, serde_json::to_string(&new).unwrap()).unwrap();
+
+        let exit_code = run(&[
+            baseline_path.to_string_lossy().to_string(),
+            new_path.to_string_lossy().to_string(),
+        ]);
+        assert_eq!(exit_code, 2, "comparing chat vs embeddings reports should be rejected outright");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

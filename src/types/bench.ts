@@ -18,7 +18,14 @@ export interface BenchConfig {
   image_data_url?: string | null;
   warmup_requests?: number;
   request_rate_per_sec?: number | null;
+  endpoint_type?: EndpointType;
+  embedding_inputs?: string[];
+  rerank_query?: string;
+  rerank_documents?: string[];
 }
+
+// 压测的目标端点类型，默认 "chat"
+export type EndpointType = "chat" | "embeddings" | "rerank";
 
 // 对话消息
 export interface Message {
@@ -33,6 +40,7 @@ export interface RequestMetrics {
   tpots: number[];
   e2e_latency_us: number;
   token_count: number;
+  item_count?: number;
   success: boolean;
   error?: string;
 }
@@ -54,6 +62,7 @@ export interface BenchReport {
   e2e_p95_ms: number;
   e2e_p99_ms: number;
   avg_throughput_tok_s: number;
+  avg_throughput_items_s?: number;
   success_rate_pct: number;
 }
 
